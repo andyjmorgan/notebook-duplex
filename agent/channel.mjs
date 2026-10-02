@@ -23,7 +23,8 @@ const log = message => console.error('notebook-duplex channel: ' + message)
 
 const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()).optional() }).passthrough() })
 let remote, remoteReady = Promise.resolve(), instructions = ''
-const local = new Server({ name: 'notebook-duplex', version: '0.2.0' }, { capabilities: { tools: {}, experimental: { 'claude/channel': {} } } })
+const local = new Server({ name: 'notebook-duplex', version: '0.2.0' }, { capabilities: { tools: { listChanged: true }, experimental: { 'claude/channel': {} } } })
+let lastToolSignature = ''
 
 async function connectRemote(attempt = 0) {
   const client = new Client({ name: 'notebook-duplex-channel', version: '0.2.0' }, { capabilities: {} })
@@ -35,6 +36,12 @@ async function connectRemote(attempt = 0) {
     await client.callTool({ name: 'identify_session', arguments: { name, repo: process.cwd() } }).catch(() => {})
     remote = client
     log(`connected to ${url} as "${name}"`)
+    // A redeploy can change the tool surface; tell Claude Code to re-list rather than keep a stale schema.
+    try {
+      const signature = JSON.stringify((await client.listTools()).tools)
+      if (lastToolSignature && signature !== lastToolSignature) { await local.sendToolListChanged(); log('tool list changed; asked Claude Code to refresh') }
+      lastToolSignature = signature
+    } catch {}
     transport.onclose = () => { if (remote === client) { remote = undefined; log('remote closed, reconnecting'); remoteReady = connectRemote() } }
     transport.onerror = e => log('transport: ' + (e?.message ?? e))
   } catch (e) {

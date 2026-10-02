@@ -17,6 +17,7 @@ test('stdio channel shim proxies tools and forwards channel notifications from t
   await client.connect(transport)
   t.after(() => client.close())
   assert.deepEqual(client.getServerCapabilities().experimental['claude/channel'], {})
+  assert.equal(client.getServerCapabilities().tools?.listChanged, true, 'the shim announces tool list changes so a redeploy refreshes the schema')
   const session = await until(async () => (await request('/api/state')).data.sessions.find(s => s.name === 'shim-test'))
   assert.equal(session.repo, process.cwd())
   const tools = (await client.listTools()).tools.map(t => t.name)
