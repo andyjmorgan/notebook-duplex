@@ -231,7 +231,14 @@ export class Store {
     if (job.status === 'completed' && Date.now() - (job.finishedAt ?? 0) < 120000) { job.status = 'running'; delete job.finishedAt }
     if (job.status !== 'running') throw new Error(job.status === 'completed' ? 'This job closed more than two minutes ago; wait for the writer\'s next command.' : 'Claim this job before proposing changes.')
     let type = input.type ?? 'replace'
-    if (type === 'delete') { type = 'replace'; input = { ...input, after: '' } }
+    if (type === 'delete' || (type === 'replace' && input.after === '')) {
+      const block = job.snapshot.blocks.find(b => b.id === input.blockId)
+      if (!block || !this.inScope(job, block)) throw new Error('Target outside job scope')
+      if (input.blockRevision !== block.revision) throw new Error('blockRevision must match the job snapshot: use the value from claim_job.')
+      const proposal = { ...base, type: 'replace', blockId: block.id, blockType: block.type, blockRevision: block.revision, before: block.text, after: '' }
+      this.state.proposals.push(proposal)
+      return proposal
+    }
     const base = { id: randomUUID(), type, jobId: job.id, sessionId, documentId: job.documentId, explanation: String(input.explanation ?? '').slice(0, 4000), status: 'pending', createdAt: Date.now() }
     if (type === 'replace') {
       const block = job.snapshot.blocks.find(b => b.id === input.blockId)
@@ -359,7 +366,7 @@ export class Store {
       proposal.status = 'accepted'
       proposal.reviewedAt = Date.now()
       return { proposal, document: this.state.document, inserted }
-    } else if (proposal.blockType === 'table') {
+    } else if (proposal.blockType === 'table' && (typeof options.text === 'string' ? options.text : proposal.after).trim()) {
       const text = typeof options.text === 'string' ? options.text : proposal.after
       const rows = parseTableMarkdown(text)
       const index = topLevelIndex(doc, proposal.blockId)
@@ -374,7 +381,7 @@ export class Store {
       return { proposal, document: this.state.document, node: rebuilt }
     } else {
       const text = typeof options.text === 'string' ? options.text : proposal.after
-      validateText(text)
+      if (proposal.blockType !== 'table') validateText(text)
       const node = findNode(doc, proposal.blockId)
       if (!text.trim()) {
         removeNode(doc, proposal.blockId)

@@ -260,3 +260,18 @@ test('move proposals relocate a contiguous run and go stale when the run breaks'
   store.sync({ json: next, expectedRevision: store.state.document.revision })
   assert.equal(store.view().proposals.find(p => p.id === again.id).stale, true)
 })
+test('delete works on empty paragraphs and on tables without content validation', () => {
+  const store = new Store()
+  const table = { type: 'table', attrs: { id: 't' }, content: [{ type: 'tableRow', attrs: { id: 'r' }, content: [{ type: 'tableHeader', attrs: { id: 'c' }, content: [{ type: 'paragraph', attrs: { id: 'cp' }, content: [{ type: 'text', text: 'x' }] }] }] }] }
+  store.sync({ json: { type: 'doc', content: [{ type: 'paragraph', attrs: { id: 'empty' } }, table, { type: 'paragraph', attrs: { id: 'keep' }, content: [{ type: 'text', text: 'Keep' }] }] }, expectedRevision: 0 })
+  const job = store.enqueue({ instruction: 'tidy', sessionId: 's', blockIds: [] }); store.claim(job.id, 's')
+  const empty = job.snapshot.blocks.find(b => b.id === 'empty'), tbl = job.snapshot.blocks.find(b => b.id === 't')
+  assert.equal(empty.text, '')
+  const p1 = store.propose({ jobId: job.id, type: 'delete', blockId: 'empty', blockRevision: empty.revision, before: '' }, 's')
+  const p2 = store.propose({ jobId: job.id, type: 'delete', blockId: 't', blockRevision: tbl.revision }, 's')
+  assert.throws(() => store.propose({ jobId: job.id, type: 'delete', blockId: 'keep', blockRevision: 'stale' }, 's'), /blockRevision/)
+  assert.equal(store.review(p1.id, 'accept').removed, true)
+  const result = store.review(p2.id, 'accept')
+  assert.equal(result.removed, true)
+  assert.deepEqual(result.document.json.content.map(n => n.attrs.id), ['keep'])
+})
