@@ -19,7 +19,8 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
   const live = jobs.filter(active)
   const recent = [...jobs].filter(j => !active(j)).reverse().slice(0, 6)
   const pending = proposals.filter(p => p.status === 'pending')
-  const command = `claude mcp add --transport http notebook-duplex ${mcpUrl} --header "Authorization: Bearer ${showKey ? apiKey : '<notebook key>'}"`
+  const origin = mcpUrl.replace(/\/mcp$/, '')
+  const command = `claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${origin} --key ${showKey ? apiKey : '<notebook key>'}`
   const copy = async (text: string, label: string) => { try { await navigator.clipboard.writeText(text); onNotify(label) } catch { onNotify('Copy failed. Select the text instead.') } }
   return (
     <aside className="rail" aria-label="Collaboration">
@@ -83,10 +84,10 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
 
       <details className="setup">
         <summary>Connect a Claude session</summary>
-        <p>In any Claude Code session, register this notebook as an MCP server, then relaunch with the channel enabled:</p>
+        <p>Claude Code channels run as a local stdio process. Clone the repo once, register its <code>agent/channel.mjs</code> shim (it proxies to this server), then launch with the channel enabled:</p>
         <pre><code>{command}{'\n'}claude --dangerously-load-development-channels server:notebook-duplex</code></pre>
         <div className="setup-actions">
-          <button className="quiet small" onClick={() => copy(command.replace('<notebook key>', apiKey) + '\nclaude --dangerously-load-development-channels server:notebook-duplex', 'Commands copied with your key.')}>Copy with key</button>
+          <button className="quiet small" onClick={() => copy(command.replace('<notebook key>', apiKey) + '\nclaude --dangerously-load-development-channels server:notebook-duplex', 'Commands copied with your key. Replace <checkout> with your clone path.')}>Copy with key</button>
           <button className="quiet small ghost" onClick={() => setShowKey(v => !v)}>{showKey ? 'Hide key' : 'Show key'}</button>
         </div>
         <p>Claude proposes; only you accept. Tool permissions stay in Claude's terminal.</p>

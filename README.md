@@ -16,17 +16,17 @@ Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a sin
 
 ## Connect a Claude session
 
-In any Claude Code session (any repository, any machine):
+Claude Code channels only run as a local stdio process that Claude spawns, so the connection goes through a small shim, `agent/channel.mjs`, which proxies tools to the hosted server over MCP Streamable HTTP and forwards channel notifications back. Clone this repo once and `npm ci`, then register the shim (user scope makes it available from every repository):
 
 ```sh
-claude mcp add --transport http notebook-duplex https://notebook.donkeywork.dev/mcp \
-  --header "Authorization: Bearer <notebook key>"
+claude mcp add --transport stdio --scope user notebook-duplex -- \
+  node /path/to/notebook-duplex/agent/channel.mjs --url https://notebook.donkeywork.dev --key <notebook key>
 claude --dangerously-load-development-channels server:notebook-duplex
 ```
 
-The rail's **Connect a Claude session** panel copies these commands with your key filled in. Accept the development-channel warning and the usual trust prompts in Claude's terminal. Then call `identify_session` (Claude does this when asked) or just pick the session in the editor.
+The rail's **Connect a Claude session** panel copies these commands with your key filled in. Accept the development-channel warning and the usual trust prompts in Claude's terminal. The shim names the session after the directory Claude runs in and reports that path, so you can tell sessions apart in the editor. `--name` overrides it; `NOTEBOOK_DUPLEX_URL`, `NOTEBOOK_DUPLEX_KEY` and `NOTEBOOK_DUPLEX_NAME` work as environment variables too.
 
-Multiple sessions can connect at once. Each job is addressed to one session. Restarting Claude creates a new session; cancel and resubmit anything it was holding.
+Multiple sessions can connect at once. Each job is addressed to one session. Restarting Claude creates a new session; cancel and resubmit anything it was holding. If you are on the lab LAN, the hostname must resolve to office1 rather than the public IP (the EdgeRouter has a static host mapping for this), or TLS will present the router's certificate.
 
 ## Agent tools
 
@@ -85,7 +85,7 @@ The end-to-end test covers the key gate, inline replace and insert proposals, ed
 
 - One notebook per deployment, single writer. No CRDT or simultaneous editing.
 - Replace proposals target plain-text paragraphs and headings. Use insert proposals for formatted content; agent edits to existing tables are not supported.
-- Tool permission and trust prompts stay in Claude's terminal.
+- Tool permission and trust prompts stay in Claude's terminal. Channels are a Claude Code research preview and need the development-channel flag; organisation policy can disable them.
 - Cancelling a job invalidates late results but does not interrupt Claude's loop.
 - Markdown import may normalise source. Obsidian syntax, frontmatter and raw HTML are not certified to round-trip.
 - Anyone with the notebook key can read and write the notebook and connect an agent to it. Rotate it from the lab vault if it leaks.
