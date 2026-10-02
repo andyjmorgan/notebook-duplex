@@ -72,6 +72,7 @@ export function App() {
   const pendingSync = useRef<ReturnType<typeof setTimeout>>(undefined)
   const proofreadSeen = useRef(new Map<string, string>())
   const firedDirectives = useRef(new Set<string>())
+  const localDirectives = useRef(new Map<string, 'queued'>())
   const slashRef = useRef({ open: false, index: 0 })
   const stateRef = useRef<State>(undefined)
   const pageRef = useRef<HTMLDivElement>(null)
@@ -173,7 +174,7 @@ export function App() {
       syncing.current = true
       try {
         const json = editor.getJSON()
-        const saved = await api('/api/sync', { json, markdown: editor.getMarkdown(), title: titleRef.current?.value ?? '', expectedRevision: revision.current })
+        const saved = await api('/api/sync', { json, title: titleRef.current?.value ?? '', expectedRevision: revision.current })
         revision.current = saved.revision
         dirty.current = JSON.stringify(json) !== JSON.stringify(editor.getJSON())
         setSaveState(dirty.current ? 'Saving…' : 'Saved')
@@ -186,8 +187,14 @@ export function App() {
     })
     return syncChain.current
   }, [editor, notify])
-  function queueSync() { clearTimeout(pendingSync.current); setSaveState('Saving…'); pendingSync.current = setTimeout(() => void sync(), 400) }
-  async function flush() { clearTimeout(pendingSync.current); await sync(); if (dirty.current) throw new Error('Your latest change has not saved yet. Try again in a moment.') }
+  function queueSync() { clearTimeout(pendingSync.current); setSaveState('Saving…'); pendingSync.current = setTimeout(() => { pendingSync.current = undefined; void sync() }, 400) }
+  async function flush() {
+    if (!dirty.current && !pendingSync.current) return
+    clearTimeout(pendingSync.current); pendingSync.current = undefined
+    await sync()
+    if (dirty.current) throw new Error('Your latest change has not saved yet. Try again in a moment.')
+  }
+  const refresh = async () => { try { const next = await api<State>('/api/state?lite=1'); setState(prev => ({ ...next, document: { ...next.document, json: prev?.document.json ?? null, markdown: prev?.document.markdown ?? '' } })) } catch {} }
 
   async function reload() {
     if (!editor) return
@@ -206,8 +213,8 @@ export function App() {
     const poll = async () => {
       if (cancelled) return
       try {
-        const next = await api<State>('/api/state')
-        if (!cancelled) setState(next)
+        const next = await api<State>('/api/state?lite=1')
+        if (!cancelled) setState(prev => ({ ...next, document: { ...next.document, json: prev?.document.json ?? null, markdown: prev?.document.markdown ?? '' } }))
       } catch (e) {
         if (e instanceof Unauthorized) { setAuthed(false); return }
         setConnectionLabel('Reconnecting…')
@@ -245,6 +252,7 @@ export function App() {
     const queued = state.jobs.filter(j => j.status === 'queued')
     const directiveStatus: DirectiveStatus = new Map()
     for (const j of state.jobs) if (j.directive && j.blockIds[0]) directiveStatus.set(`${j.blockIds[0]}|${j.directive}`, j.status === 'queued' ? 'queued' : ['running', 'needs_permission'].includes(j.status) ? 'working' : j.status === 'completed' ? 'done' : 'failed')
+    for (const [key, value] of localDirectives.current) { if (directiveStatus.has(key)) localDirectives.current.delete(key); else directiveStatus.set(key, value) }
     editor.view.dispatch(editor.state.tr.setMeta(annotationsKey, { proposals, activity: state.activity, queued, sessions: state.sessions }).setMeta(directivesPluginKey, directiveStatus).setMeta('addToHistory', false))
     releaseHosts(new Set(proposals.map(p => p.id)))
     const working = [...editor.view.dom.querySelectorAll<HTMLElement>('.agent-active')].map((element, i) => ({ id: 'w' + i, kind: 'working' as const, element }))
@@ -301,7 +309,7 @@ export function App() {
     await flush()
     await api('/api/jobs', { instruction, blockIds: whole || !command.scopeId ? [] : [command.scopeId], sessionId, context: command.selection ? { selection: command.selection } : undefined })
     closeCommand()
-    setState(await api<State>('/api/state'))
+    void refresh()
   }
   function runDirective() {
     const id = currentBlockId(); let text = ''
@@ -327,7 +335,7 @@ export function App() {
   async function withBusy(fn: () => Promise<void>) {
     if (busy) return
     setBusy(true)
-    try { await fn() } catch (e) { notify((e as Error).message); throw e } finally { setBusy(false); setState(await api<State>('/api/state').catch(() => stateRef.current)) }
+    try { await fn() } catch (e) { notify((e as Error).message); throw e } finally { setBusy(false); void refresh() }
   }
   const accept = async (proposal: Proposal, edited: string) => withBusy(async () => {
     if (!editor) return
@@ -339,6 +347,7 @@ export function App() {
       if (!nodes.length) throw new Error('Nothing to insert.')
       const result = await api('/api/review', { id: proposal.id, decision: 'accept', nodes, markdown: edited })
       if (result.stale) { notify('The surrounding text changed, so this addition no longer applies.'); return }
+      setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'accepted' } : p) })
       const anchor = blockPosition(proposal.anchorBlockId!)
       if (!anchor) throw new Error('Anchor disappeared. Reloading.')
       const inserted = (result.inserted as any[]).map(n => editor.schema.nodeFromJSON(n))
@@ -346,12 +355,25 @@ export function App() {
       editor.view.dispatch(editor.state.tr.insert(at, Fragment.fromArray(inserted)))
       revision.current = result.document.revision
     } else {
-      const result = await api('/api/review', { id: proposal.id, decision: 'accept', text: edited })
+      // Paragraph and heading text travels as inline Markdown; parse it here so marks survive.
+      let content: any[] | undefined
+      if (proposal.blockType !== 'table' && edited.trim()) {
+        const parsed = editor.markdown?.parse(edited)
+        const first = parsed?.content?.[0]
+        if (first?.content?.length) content = first.content
+      }
+      const result = await api('/api/review', { id: proposal.id, decision: 'accept', text: edited, content })
       if (result.stale) { notify('You changed this paragraph, so the suggestion no longer applies.'); return }
       const target = blockPosition(proposal.blockId!)
       if (!target) throw new Error('Target disappeared. Reloading.')
-      if (result.node) editor.view.dispatch(editor.state.tr.replaceWith(target.pos, target.pos + target.size, editor.schema.nodeFromJSON(result.node)))
-      else { const text = result.proposal.finalText ?? edited; editor.view.dispatch(editor.state.tr.replaceWith(target.pos + 1, target.pos + target.size - 1, text ? editor.schema.text(text) : [])) }
+      setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'accepted' } : p) })
+      if (result.removed) editor.view.dispatch(editor.state.tr.delete(target.pos, target.pos + target.size))
+      else if (result.node) editor.view.dispatch(editor.state.tr.replaceWith(target.pos, target.pos + target.size, editor.schema.nodeFromJSON(result.node)))
+      else {
+        const fresh = result.document.json && (function find(n: any): any { if (n.attrs?.id === proposal.blockId) return n; for (const c of n.content ?? []) { const f = find(c); if (f) return f } })(result.document.json)
+        const inline = (fresh?.content ?? []).map((n: any) => editor.schema.nodeFromJSON(n))
+        editor.view.dispatch(editor.state.tr.replaceWith(target.pos + 1, target.pos + target.size - 1, inline))
+      }
       revision.current = result.document.revision
     }
     const job = stateRef.current?.jobs.find(j => j.id === proposal.jobId)
@@ -362,13 +384,17 @@ export function App() {
         editor.view.dispatch(editor.state.tr.delete(before === ' ' ? chip.from - 1 : chip.from, chip.to))
       }
     }
-    await sync()
-    notify('Accepted. ⌘Z undoes it.')
+    // The mirror matches the server document; a deferred sync reconciles any drift without blocking the writer.
+    dirty.current = false; setSaveState('Saved'); queueSync()
+    notify(proposal.after === '' && proposal.type === 'replace' ? 'Removed. ⌘Z undoes it.' : 'Accepted. ⌘Z undoes it.')
   })
-  const reject = async (proposal: Proposal) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'reject' }) })
+  const resolve = async (proposal: Proposal) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'resolve' }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'resolved' } : p) }) })
+  const reply = async (proposal: Proposal, feedback: string) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'reply', feedback }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'replied' } : p) }); notify('Reply sent.') })
+  const parseMarkdown = (markdown: string): any[] => editor?.markdown?.parse(markdown)?.content ?? []
+  const reject = async (proposal: Proposal) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'reject' }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'rejected' } : p) }) })
   const reconsider = async (proposal: Proposal, feedback: string) => withBusy(async () => { await flush(); await api('/api/review', { id: proposal.id, decision: 'reconsider', feedback }); notify('Sent back with your note.') })
-  const cancelJob = async (id: string) => { await api('/api/cancel', { id }); setState(await api<State>('/api/state')) }
-  const demo = async () => { try { await flush(); await api('/api/demo', { blockId: currentBlockId() }); setState(await api<State>('/api/state')) } catch (e) { notify((e as Error).message) } }
+  const cancelJob = async (id: string) => { await api('/api/cancel', { id }); void refresh() }
+  const demo = async () => { try { await flush(); await api('/api/demo', { blockId: currentBlockId() }); void refresh() } catch (e) { notify((e as Error).message) } }
   function locate(proposal: Proposal) {
     const id = proposal.type === 'insert' ? proposal.anchorBlockId! : proposal.blockId!
     const pos = blockPosition(id)
@@ -405,13 +431,16 @@ export function App() {
     const fresh = findDirectives(editor.state.doc).filter(d => d.complete && d.text && !firedDirectives.current.has(directiveKey(d)))
     for (const d of fresh) {
       firedDirectives.current.add(directiveKey(d))
+      localDirectives.current.set(directiveKey(d), 'queued')
+      const current = directivesPluginKey.getState(editor.state) ?? new Map()
+      editor.view.dispatch(editor.state.tr.setMeta(directivesPluginKey, new Map([...current, [directiveKey(d), 'queued']])).setMeta('addToHistory', false))
       void (async () => {
         try {
-          clearTimeout(pendingSync.current)
+          clearTimeout(pendingSync.current); pendingSync.current = undefined
           await sync().catch(() => {})
           await api('/api/jobs', { instruction: d.text, blockIds: [d.blockId], sessionId, context: { tk: d.text, inline: d.inline } })
-          setState(await api<State>('/api/state'))
-        } catch (e) { firedDirectives.current.delete(directiveKey(d)); notify((e as Error).message) }
+          void refresh()
+        } catch (e) { firedDirectives.current.delete(directiveKey(d)); localDirectives.current.delete(directiveKey(d)); notify((e as Error).message) }
       })()
     }
   }
@@ -437,7 +466,7 @@ export function App() {
         let table: { ids: string[] } | undefined
         for (let d = $pos?.depth ?? 0; d > 0; d--) { const n = $pos!.node(d); if (n.type.name === 'table') { const ids: string[] = [n.attrs.id]; n.descendants(c => { if (c.type.name === 'paragraph' && c.attrs.id) ids.push(c.attrs.id) }); table = { ids } } }
         await api('/api/jobs', { instruction: table ? PROOFREAD_TABLE_INSTRUCTION : PROOFREAD_INSTRUCTION, blockIds: table ? table.ids : [menu.blockId], sessionId, kind: 'proofread', context: table ? { table: true } : undefined })
-        setState(await api<State>('/api/state'))
+        void refresh()
       } catch (e) { notify((e as Error).message) }
     }
     return [
@@ -494,7 +523,7 @@ export function App() {
         </main>
         <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); proofreadSeen.current.clear(); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onNotify={notify} />
       </div>
-      {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} onAccept={accept} onReject={reject} onReconsider={reconsider} />, hostFor(p.id), p.id))}
+      {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />
       {slashOpen && slashPosition && <SlashMenu query={view!.slashText} index={slashIndex} position={slashPosition} onPick={executeSlash} />}
       <div id="toast" role="status" aria-live="polite" className={toast ? 'visible' : ''}>{toast}</div>

@@ -43,6 +43,8 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await shot('inline-suggestions')
 
   // Edit the insert text, then accept it: content lands after the anchor with new IDs
+  assert.ok((await page.locator('.suggestion.insert .markdown-preview blockquote').count()) === 1, 'insert cards open on a rendered preview')
+  await page.click('.suggestion.insert .view-tabs button:has-text("Edit")')
   await page.fill('.suggestion.insert textarea', '> Edited by the writer.\n\n- one\n- two')
   await page.click('.suggestion.insert button:has-text("Accept edited")')
   await until(async () => (await page.locator('.tiptap blockquote').count()) === 1)
@@ -127,12 +129,59 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.keyboard.press('Control+z')
   await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()).startsWith('Write with your Claude session'))
 
-  // Slash menu inserts a table; reading mode locks the editor
-  await page.click('.tiptap > p:nth-of-type(3)')
-  await page.keyboard.press('End')
+  // Formatted paragraphs are replaceable as inline Markdown, and an empty replacement removes a block
+  await page.click('.tiptap > p:nth-of-type(1)', { clickCount: 3 })
+  await page.click('.toolbar [data-action="bold"]')
+  await until(async () => (await page.locator('.tiptap > p:nth-of-type(1) strong').count()) === 1)
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  const fmtState = (await request('/api/state')).data
+  const fmtId = fmtState.document.json.content[0].attrs.id
+  const { data: fmtJob } = await request('/api/jobs', { instruction: 'Better word', blockIds: [fmtId], sessionId: (await request('/api/state')).data.sessions[0].id })
+  const fmtClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: fmtJob.id } })).content[0].text)
+  const fmtBlock = fmtClaim.snapshot.blocks.find(b => b.id === fmtId)
+  assert.match(fmtBlock.text, /^\*\*.*\*\*$/, 'bold paragraph is presented as inline markdown')
+  const fmtProposal = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: fmtJob.id, type: 'replace', blockId: fmtId, blockRevision: fmtBlock.revision, before: fmtBlock.text, after: '**Write beside** your *Claude* session.', explanation: 'keeps the bold' } })).content[0].text)
+  assert.ok(!fmtProposal.error && fmtProposal.id, 'formatted blocks are accepted as replace targets: ' + JSON.stringify(fmtProposal))
+  await page.click(`.suggestion-host[data-proposal="${fmtProposal.id}"] button:has-text("Accept")`)
+  await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()) === 'Write beside your Claude session.')
+  assert.equal(await page.locator('.tiptap > p:nth-of-type(1) strong').textContent(), 'Write beside')
+  assert.equal(await page.locator('.tiptap > p:nth-of-type(1) em').textContent(), 'Claude')
+  const delTarget = (await request('/api/state')).data.document.json.content.filter(n => n.type === 'paragraph').at(-1)
+  const { data: delJob } = await request('/api/jobs', { instruction: 'Remove duplicate', blockIds: [delTarget.attrs.id], sessionId: (await request('/api/state')).data.sessions[0].id })
+  const delClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: delJob.id } })).content[0].text)
+  const delBlock = delClaim.snapshot.blocks.find(b => b.id === delTarget.attrs.id)
+  const delProposal = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: delJob.id, type: 'replace', blockId: delBlock.id, blockRevision: delBlock.revision, before: delBlock.text, after: '', explanation: 'redundant' } })).content[0].text)
+  await page.waitForSelector(`.suggestion-host[data-proposal="${delProposal.id}"] .suggestion.removal`)
+  await page.click(`.suggestion-host[data-proposal="${delProposal.id}"] button:has-text("Remove")`)
+  await until(async () => !(await page.locator('.tiptap').textContent()).includes('[tk: Find a primary source'))
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  assert.equal((await request('/api/state')).data.document.json.content.some(n => n.attrs?.id === delTarget.attrs.id), false)
+
+  // Comments: the agent responds in place without editing; the writer replies and the thread continues
+  const cmtTarget = (await request('/api/state')).data.document.json.content.find(n => n.type === 'paragraph')
+  const { data: cmtJob } = await request('/api/jobs', { instruction: 'Is this true?', blockIds: [cmtTarget.attrs.id], sessionId: (await request('/api/state')).data.sessions[0].id })
+  await client.callTool({ name: 'claim_job', arguments: { jobId: cmtJob.id } })
+  const cmt = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: cmtJob.id, type: 'comment', blockId: cmtTarget.attrs.id, text: 'Mostly. See **Kleppmann 2019** for the nuance.' } })).content[0].text)
+  await page.waitForSelector(`.suggestion-host[data-proposal="${cmt.id}"] .suggestion.comment`)
+  assert.equal(await page.locator(`.suggestion-host[data-proposal="${cmt.id}"] strong`).textContent(), 'Kleppmann 2019', 'comments render Markdown')
+  await shot('comment')
+  await page.click(`.suggestion-host[data-proposal="${cmt.id}"] button:has-text("Reply")`)
+  await page.fill(`.suggestion-host[data-proposal="${cmt.id}"] textarea`, 'Add it as a footnote then.')
   await page.keyboard.press('Enter')
+  const replyEvent = await until(() => notifications.find(n => n.meta.job_id !== cmtJob.id && /footnote/.test(n.content)))
+  assert.match(replyEvent.content, /replied to one of your comments/)
+  await until(async () => (await page.locator(`.suggestion-host[data-proposal="${cmt.id}"]`).count()) === 0)
+
+  // Slash menu inserts a table; reading mode locks the editor
+  assert.match(await page.locator('.tiptap > p:nth-of-type(1)').textContent(), /^Write beside your Claude session\./, 'earlier flows left the first paragraph intact')
+  await page.click('.tiptap > p:nth-of-type(3)')
+  await page.waitForTimeout(80)
+  await page.keyboard.press('Control+End'); await page.waitForTimeout(80)
+  await page.keyboard.press('Enter'); await page.waitForTimeout(80)
   await page.keyboard.type('/tab')
-  await page.waitForSelector('#slash-menu [data-slash="table"]')
+  await page.waitForSelector('#slash-menu [data-slash="table"]', { timeout: 8000 }).catch(async e => {
+    throw new Error(e.message + '\nactive=' + await page.evaluate(() => document.activeElement?.className) + '\neditable=' + await page.getAttribute('.tiptap', 'contenteditable') + '\nparas=' + JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('.tiptap > p')].map(p => p.textContent.slice(0, 30)))) + '\ntoasts=' + JSON.stringify(await toasts()))
+  })
   await page.keyboard.press('Enter')
   assert.equal(await page.locator('.tiptap table').count(), 2)
   await page.click('.segmented button:has-text("Reading")')
@@ -177,7 +226,7 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.keyboard.press('Enter')
   const askEvent = await until(() => notifications.find(n => /Is this claim true/.test(n.content)))
   assert.match(askEvent.content, /highlighted this text/)
-  await page.click('.tiptap table >> nth=1 >> td >> nth=0', { button: 'right' })
+  await page.click('.tiptap table >> nth=0 >> td >> nth=0', { button: 'right' })
   await page.waitForSelector('.context-menu')
   await page.click('.context-menu button:has-text("Proofread this")')
   const tableEvent = await until(() => notifications.find(n => /Proofread this table/.test(n.content)))
@@ -199,20 +248,22 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.evaluate(() => document.querySelector('.suggestion .table-diff')?.scrollIntoView({ block: 'center' }))
   await page.waitForTimeout(300)
   await shot('table-diff')
-  await page.click('.tiptap table >> nth=1 >> td >> nth=0')
+  await page.click('.tiptap table >> nth=0 >> td >> nth=0')
   await page.keyboard.press('Control+Enter')
-  await until(async () => (await page.locator('.tiptap table >> nth=1 >> tr').count()) === 4)
-  assert.ok((await page.locator('.tiptap table >> nth=1').textContent()).includes('Write without stopping'))
+  await until(async () => (await page.locator('.tiptap table >> nth=0 >> tr').count()) === 4)
+  assert.ok((await page.locator('.tiptap table >> nth=0').textContent()).includes('Write without stopping'))
   await client.callTool({ name: 'report_job_status', arguments: { jobId: tableClaim.id, status: 'completed', message: 'done' } })
 
   // Off-screen marker: with a suggestion far below the viewport, a pill appears at the bottom
+  await page.setViewportSize({ width: 1440, height: 560 })
   await page.evaluate(() => window.scrollTo(0, 0))
-  const lastId = (await request('/api/state')).data.document.json.content.filter(n => n.type === 'paragraph').at(-1).attrs.id
+  const lastId = (await request('/api/state')).data.document.json.content.filter(n => n.type === 'paragraph' && n.content?.length).at(-1).attrs.id
   await request('/api/demo', { blockId: lastId })
   await page.waitForSelector('.offscreen-bottom .offscreen-pill')
   await shot('offscreen-pill')
   await page.click('.offscreen-bottom .offscreen-pill')
   await until(async () => (await page.locator('.offscreen-bottom .offscreen-pill').count()) === 0)
+  await page.setViewportSize({ width: 1440, height: 940 })
 
   // Images parse from Markdown
   await page.evaluate(() => { const w = window; w.confirm = () => true })

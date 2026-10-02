@@ -11,6 +11,8 @@ Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a sin
 - **Edit before you accept.** Insert proposals are editable in place. Replace proposals have an **Edit** mode. Accepting an edited suggestion records your final text.
 - **See where Claude is working.** Claude marks the blocks it is reading, thinking about, or writing. The paragraph gets a breathing gutter bar that fills with progress and a small pill naming the session and its message. Queued requests show a dashed bar. The right rail shows the same with a progress line.
 - **Inline directives.** Type `[tk: find a source for this]` anywhere. The note renders as a chip while you type and fires the moment you close the bracket, so you keep writing while Claude works. The chip shows queued, working and done states in place; Claude's proposal removes the directive when you accept it.
+- **Comments, not just edits.** When Claude has something to say but nothing to change (an answer, a caveat, a question back), it leaves a Markdown comment on the section. Resolve it, or Reply and the thread continues as a follow-up job.
+- **Preview before you accept.** Insert cards open on a rendered preview with an Edit tab for the Markdown. Edit cards switch between Diff, Preview and Edit. Formatted paragraphs (bold, italic, links, code) are replaceable: the agent reads and writes inline Markdown and formatting survives. An empty replacement removes the block.
 - **Right-click menu.** Ask the agent about the highlighted text (the selection travels with the request), proofread the paragraph or table under the caret, format, insert a table, cut, copy and paste.
 - **Nothing hides off-screen.** Floating pills at the top and bottom of the page count suggestions and working agents outside the viewport and scroll you to the nearest one.
 - **Keyboard review.** With the caret in a paragraph that has a suggestion, `⌘↵` accepts it. `⌘Z` undoes any accepted change.
@@ -42,7 +44,7 @@ Claude receives each command as a `notifications/claude/channel` event over the 
 | `claim_job` | Acknowledge a job and read its immutable snapshot (block IDs, text, revisions, any reconsideration note) |
 | `get_document_snapshot` | Re-read a job snapshot or the live document |
 | `set_block_status` | Mark blocks as `reading`, `thinking`, `writing`, `waiting` or `done`, with optional progress and message |
-| `propose_changes` | `replace` one plain-text paragraph or heading, or `insert` Markdown before or after an anchor block |
+| `propose_changes` | `replace` a paragraph, heading or table (inline or GFM Markdown in and out; empty removes the block), `insert` Markdown before or after an anchor, or `comment` on a block |
 | `report_job_status` | `running`, `completed`, `failed` or `needs_permission` |
 
 There is no accept tool. The server verifies every proposal against the job snapshot, and acceptance checks the target's revision again at review time.
@@ -87,7 +89,7 @@ The end-to-end test covers the key gate, inline replace and insert proposals, ed
 ## Limits
 
 - One notebook per deployment, single writer. No CRDT or simultaneous editing.
-- Replace proposals target plain-text paragraphs and headings. Use insert proposals for formatted content; agent edits to existing tables are not supported.
+- Replace proposals cover paragraphs, headings and tables. Code blocks and diagrams can be inserted but not rewritten in place yet.
 - Tool permission and trust prompts stay in Claude's terminal. Channels are a Claude Code research preview and need the development-channel flag; organisation policy can disable them.
 - Cancelling a job invalidates late results but does not interrupt Claude's loop.
 - Markdown import may normalise source. Obsidian syntax, frontmatter and raw HTML are not certified to round-trip.

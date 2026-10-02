@@ -11,7 +11,7 @@ export function blocksOf(doc) {
   const walk = (node, topLevelId) => {
     if (TEXT_BLOCKS.includes(node.type) && node.attrs?.id) {
       const plain = (node.content ?? []).every(n => n.type === 'text' && !n.marks?.length)
-      blocks.push({ id: node.attrs.id, type: node.type, level: node.attrs.level, text: textOf(node), revision: hash(node), plain, topLevelId })
+      blocks.push({ id: node.attrs.id, type: node.type, level: node.attrs.level, text: inlineMarkdown(node), plain, revision: hash(node), topLevelId })
     } else if (node.type === 'table' && node.attrs?.id) {
       blocks.push({ id: node.attrs.id, type: 'table', text: tableMarkdown(node), revision: hash(node), plain: tableIsPlain(node), topLevelId, rows: tableRows(node).length })
     }
@@ -45,7 +45,33 @@ export function parseTableMarkdown(markdown) {
   const width = Math.max(...rows.map(r => r.length))
   return rows.map(r => Array.from({ length: width }, (_, i) => r[i] ?? ''))
 }
-export function blockText(node) { return node.type === 'table' ? tableMarkdown(node) : textOf(node) }
+export function blockText(node) { return node.type === 'table' ? tableMarkdown(node) : TEXT_BLOCKS.includes(node.type) ? inlineMarkdown(node) : textOf(node) }
+// Inline Markdown for a paragraph or heading: what the agent reads as `before` and writes as `after`.
+const MARK_WRAP = { bold: '**', italic: '*', strike: '~~', code: '`' }
+export function inlineMarkdown(node) {
+  let out = ''
+  for (const child of node.content ?? []) {
+    if (child.type === 'hardBreak') { out += '  \n'; continue }
+    if (child.type !== 'text') continue
+    let text = child.text ?? ''
+    const marks = child.marks ?? []
+    const link = marks.find(m => m.type === 'link')
+    for (const m of marks) if (MARK_WRAP[m.type]) text = MARK_WRAP[m.type] + text + MARK_WRAP[m.type]
+    if (link?.attrs?.href) text = `[${text}](${link.attrs.href})`
+    out += text
+  }
+  return out
+}
+const INLINE_MARKS = new Set(['bold', 'italic', 'strike', 'code', 'link', 'underline', 'highlight', 'subscript', 'superscript'])
+export function validateInlineContent(content) {
+  if (!Array.isArray(content) || content.length > 2000) throw new Error('Replacement content must be a list of inline nodes')
+  return content.map(n => {
+    if (n?.type === 'hardBreak') return { type: 'hardBreak' }
+    if (n?.type !== 'text' || typeof n.text !== 'string' || !n.text) throw new Error('Replacement content may only contain text and line breaks')
+    const marks = (n.marks ?? []).filter(m => INLINE_MARKS.has(m?.type)).map(m => m.type === 'link' ? { type: 'link', attrs: { href: String(m.attrs?.href ?? '').match(/^(https?:|mailto:|#|\/)/) ? String(m.attrs.href) : '#', target: '_blank', rel: 'noopener noreferrer nofollow' } } : { type: m.type })
+    return marks.length ? { type: 'text', text: n.text, marks } : { type: 'text', text: n.text }
+  })
+}
 export function textOf(node) {
   if (node.type === 'text') return node.text ?? ''
   if (node.type === 'hardBreak') return '\n'
@@ -76,6 +102,12 @@ function rebuildTable(table, rows, taken) {
   seen.add(next.attrs.id)
   for (const row of next.content) fix(row)
   return next
+}
+function removeNode(parent, id) {
+  const index = (parent.content ?? []).findIndex(c => c.attrs?.id === id)
+  if (index !== -1) { parent.content.splice(index, 1); if (!parent.content.length && parent.type !== 'doc') parent.content = [{ type: 'paragraph', attrs: { id: randomUUID() } }]; return true }
+  for (const child of parent.content ?? []) if (removeNode(child, id)) return true
+  return false
 }
 function findNode(node, id) {
   if (node.attrs?.id === id) return node
@@ -170,7 +202,7 @@ export class Store {
     if (type === 'replace') {
       const block = job.snapshot.blocks.find(b => b.id === input.blockId)
       if (!block || (job.blockIds.length && !job.blockIds.includes(block.id))) throw new Error('Target outside job scope')
-      if (!block.plain) throw new Error('Replacement proposals support plain-text paragraphs, headings and tables only. Use an insert proposal for formatted content.')
+      if (block.type === 'table' && !block.plain) throw new Error('This table has formatted or nested cells; propose an insert with a new table instead.')
       if (input.before !== block.text || input.blockRevision !== block.revision) throw new Error('Proposal must match the job snapshot: use before and blockRevision from claim_job.')
       if (block.type === 'table') parseTableMarkdown(input.after); else validateText(input.after)
       if (typeof input.after !== 'string' || input.after.length > 50000) throw new Error('Replacement must be under 50,000 characters')
@@ -188,7 +220,16 @@ export class Store {
       this.state.proposals.push(proposal)
       return proposal
     }
-    throw new Error('type must be replace or insert')
+    if (type === 'comment') {
+      const block = job.snapshot.blocks.find(b => b.id === input.blockId)
+      if (!block) throw new Error('blockId must be a block from the job snapshot')
+      const text = String(input.text ?? input.explanation ?? '').trim()
+      if (!text || text.length > 8000) throw new Error('A comment needs text under 8,000 characters')
+      const proposal = { ...base, blockId: block.id, blockType: block.type, text, explanation: '' }
+      this.state.proposals.push(proposal)
+      return proposal
+    }
+    throw new Error('type must be replace, insert or comment')
   }
 
   status(id, sessionId, status, message) {
@@ -218,6 +259,7 @@ export class Store {
     const doc = this.state.document.json
     if (!doc) return true
     if (proposal.type === 'insert') return topLevelIndex(doc, proposal.anchorBlockId) === -1
+    if (proposal.type === 'comment') return !findNode(doc, proposal.blockId)
     const node = findNode(doc, proposal.blockId)
     return !node || hash(node) !== proposal.blockRevision || blockText(node) !== proposal.before
   }
@@ -226,6 +268,11 @@ export class Store {
     const proposal = this.state.proposals.find(p => p.id === id)
     if (!proposal || proposal.status !== 'pending') throw new Error('Proposal is no longer pending')
     if (decision === 'reject') { proposal.status = 'rejected'; proposal.reviewedAt = Date.now(); return { proposal } }
+    if (proposal.type === 'comment') {
+      if (decision === 'reply') return this.reply(proposal, options.feedback)
+      if (decision === 'resolve' || decision === 'accept') { proposal.status = 'resolved'; proposal.reviewedAt = Date.now(); return { proposal } }
+      throw new Error('Comments can be resolved, replied to, or dismissed')
+    }
     if (decision === 'reconsider') return this.reconsider(proposal, options.feedback)
     if (decision !== 'accept') throw new Error('Invalid review decision')
     if (this.isStale(proposal)) { proposal.status = 'stale'; return { proposal, stale: true } }
@@ -260,7 +307,16 @@ export class Store {
       const text = typeof options.text === 'string' ? options.text : proposal.after
       validateText(text)
       const node = findNode(doc, proposal.blockId)
-      node.content = text ? [{ type: 'text', text }] : []
+      if (!text.trim()) {
+        removeNode(doc, proposal.blockId)
+        proposal.finalText = ''
+        proposal.removed = true
+        this.state.document.revision++
+        proposal.status = 'accepted'
+        proposal.reviewedAt = Date.now()
+        return { proposal, document: this.state.document, removed: true }
+      }
+      node.content = options.content ? validateInlineContent(options.content) : [{ type: 'text', text }]
       proposal.finalText = text
     }
     this.state.document.revision++
@@ -281,6 +337,18 @@ export class Store {
       : `You proposed replacing block ${proposal.blockId}:\n  before: ${proposal.before}\n  after: ${proposal.after}`
     const instruction = `${original.instruction}\n\nThe writer reviewed your earlier proposal and asked you to reconsider.\n${summary}\n\nWriter's note: ${proposal.feedback}\n\nSubmit a revised proposal that addresses the note.`
     const job = this.enqueue({ instruction, blockIds: original.blockIds, sessionId: original.sessionId, sessionName: original.sessionName, kind: original.kind, context: { reconsiders: proposal.id, feedback: proposal.feedback, previous: { type: proposal.type, before: proposal.before, after: proposal.after, markdown: proposal.markdown, explanation: proposal.explanation } } })
+    return { proposal, job }
+  }
+
+  reply(proposal, feedback) {
+    if (!feedback?.trim()) throw new Error('Write a reply first.')
+    const original = this.state.jobs.find(j => j.id === proposal.jobId)
+    if (!original) throw new Error('Original job not found')
+    proposal.status = 'replied'
+    proposal.feedback = feedback.slice(0, 4000)
+    proposal.reviewedAt = Date.now()
+    const instruction = `${original.instruction}\n\nYou left this comment on block ${proposal.blockId}:\n${proposal.text}\n\nThe writer replied: ${proposal.feedback}\n\nContinue the conversation: answer with another comment on the same block, or propose an edit if one is now warranted.`
+    const job = this.enqueue({ instruction, blockIds: original.blockIds.length ? original.blockIds : [proposal.blockId], sessionId: original.sessionId, sessionName: original.sessionName, kind: original.kind, context: { repliesTo: proposal.id, comment: proposal.text, feedback: proposal.feedback } })
     return { proposal, job }
   }
 

@@ -6,7 +6,7 @@ import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewP
 
 let mermaidModule: Promise<typeof import('mermaid')['default']> | undefined
 function loadMermaid() {
-  mermaidModule ??= import('mermaid').then(m => { m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', fontFamily: '"Noto Sans", sans-serif' }); return m.default })
+  mermaidModule ??= import('mermaid').then(m => { m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', fontFamily: '"Noto Sans", sans-serif', fontSize: 15, flowchart: { padding: 12, nodeSpacing: 40, rankSpacing: 50 } }); return m.default })
   return mermaidModule
 }
 let counter = 0
@@ -15,6 +15,16 @@ export function MermaidPreview({ source }: { source: string }) {
   const [svg, setSvg] = useState('')
   const [error, setError] = useState('')
   const id = useRef('mermaid-' + (++counter))
+  const host = useRef<HTMLDivElement>(null)
+  // Mermaid pins the SVG to its natural size; let small diagrams grow (up to 1.8×) while big ones still shrink to fit.
+  useEffect(() => {
+    const el = host.current?.querySelector('svg')
+    if (!el) return
+    const natural = el.viewBox?.baseVal?.width || el.getBoundingClientRect().width
+    el.style.maxWidth = 'none'
+    el.style.width = natural ? `min(100%, ${Math.round(natural * 1.8)}px)` : '100%'
+    el.style.height = 'auto'
+  }, [svg])
   useEffect(() => {
     if (!source.trim()) { setSvg(''); setError(''); return }
     let cancelled = false
@@ -33,7 +43,7 @@ export function MermaidPreview({ source }: { source: string }) {
   if (!source.trim()) return <div className="mermaid-preview empty">Type a Mermaid diagram above to preview it here.</div>
   return (
     <div className={`mermaid-preview ${error ? 'has-error' : ''}`} contentEditable={false}>
-      {svg && <div className="mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />}
+      {svg && <div ref={host} className="mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />}
       {error && <div className="mermaid-error">{error}</div>}
     </div>
   )

@@ -127,14 +127,16 @@ async function handleApi(req, res, path) {
   return serial(async () => {
     try {
       let result
-      if (req.method === 'GET' && path === '/api/state') result = { ...store.view(), sessions: sessionView() }
+      if (req.method === 'GET' && path === '/api/state') {
+        result = { ...store.view(), sessions: sessionView() }
+        if (new URL(req.url, 'http://localhost').searchParams.has('lite')) result.document = { ...result.document, json: undefined, markdown: undefined }
+      }
       else if (req.method === 'GET' && path === '/api/me') result = { ok: true, mcpUrl: publicUrl(req) + '/mcp' }
       else if (req.method === 'POST' && path === '/api/sync') result = store.sync(data)
       else if (req.method === 'POST' && path === '/api/jobs') {
         const session = sessions.get(data.sessionId)
         if (!session) throw new Error('Choose a connected Claude session first.')
         const job = store.enqueue({ ...data, sessionName: session.name })
-        await save()
         void notify(job)
         const { snapshot, ...view } = job
         result = view
@@ -142,7 +144,7 @@ async function handleApi(req, res, path) {
       else if (req.method === 'POST' && path === '/api/cancel') { store.cancel(data.id); result = { ok: true } }
       else if (req.method === 'POST' && path === '/api/review') {
         result = store.review(data.id, data.decision, data)
-        if (result.job) { await save(); void notify(result.job); const { snapshot, ...view } = result.job; result = { ...result, job: view } }
+        if (result.job) { void notify(result.job); const { snapshot, ...view } = result.job; result = { ...result, job: view } }
       }
       else if (req.method === 'POST' && path === '/api/demo') {
         const block = store.snapshot().blocks.find(b => b.id === data.blockId && b.plain && b.text)
@@ -155,7 +157,7 @@ async function handleApi(req, res, path) {
         store.status(job.id, 'local-test', 'completed', 'Local fixture generated')
       }
       else return json(res, 404, { error: 'Not found' })
-      await save()
+      if (req.method === 'POST') void save()
       json(res, 200, result)
     } catch (e) { json(res, 400, { error: e.message }) }
   })

@@ -71,7 +71,7 @@ button kbd { margin-left: 8px; opacity: .8 } .primary kbd { background: rgba(255
 .tiptap .agent-active::before { background: linear-gradient(to bottom, var(--ui-ai) var(--progress, 0%), #dfe3ff var(--progress, 0%)); box-shadow: 0 0 0 0 rgba(94,109,214,.35); animation: breathe 1.8s infinite }
 .tiptap .agent-active::after, .tiptap .agent-queued::after { content: attr(data-agent); position: absolute; right: -8px; top: -16px; font-size: 10px; color: var(--ui-ai); background: var(--ui-ai-soft); border: 1px solid #dfe3ff; border-radius: 10px; padding: 1px 8px; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: rise .25s var(--ease) }
 .tiptap .agent-queued::after { color: var(--ui-text-tertiary); background: var(--ui-background-secondary); border-color: var(--ui-border) }
-.tiptap .agent-active { background: linear-gradient(90deg, rgba(240,242,255,.9), transparent 70%); border-radius: 6px; margin-left: -10px; padding-left: 10px; margin-right: -10px; padding-right: 10px }
+.tiptap .agent-active { background: #eef0ff; border-radius: 6px; margin-left: -10px; padding-left: 10px; margin-right: -10px; padding-right: 10px; box-shadow: inset 0 0 0 1px #dfe3ff }
 @keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: .55 } }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(94,109,214,.4) } 60% { box-shadow: 0 0 0 5px rgba(94,109,214,0) } }
 @keyframes rise { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
@@ -163,9 +163,9 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 
 /* Agent presence on whole tables */
 .tiptap .tableWrapper { position: relative }
-.tiptap .tableWrapper.agent-active { margin-left: -10px; padding-left: 10px; margin-right: -10px; padding-right: 10px; border-radius: 6px }
+.tiptap .tableWrapper.agent-active { margin-left: -10px; padding: 6px 10px 2px; margin-right: -10px; border-radius: 6px; background: #eef0ff; box-shadow: inset 0 0 0 1px #dfe3ff }
 .tiptap .tableWrapper.agent-active::after, .tiptap .tableWrapper.agent-queued::after { top: -4px }
-.tiptap .agent-active-cell { background: rgba(240,242,255,.7) }
+.tiptap .agent-active-cell { background: #f4f5ff }
 .tiptap .has-suggestion-cell { box-shadow: inset 3px 0 0 var(--ui-brand) }
 
 /* Off-screen approval markers */
@@ -197,8 +197,21 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 .code-block-head { position: absolute; top: 6px; right: 8px; z-index: 1; display: flex; align-items: center; gap: 8px }
 .code-tabs { display: inline-flex; background: #fff; border: 1px solid var(--ui-border); border-radius: 6px; padding: 2px } .code-tabs button { font-size: 10.5px; padding: 1px 9px; min-height: 20px; border-radius: 4px; color: var(--ui-text-secondary) } .code-tabs button.on { background: var(--ui-brand-soft); color: var(--ui-brand-contrast) } .code-block-head select { width: auto; font-size: 10px; padding: 2px 6px; border-color: transparent; background: transparent; color: var(--ui-text-tertiary) } .code-block:hover .code-block-head select, .code-block-head select:focus { border-color: var(--ui-border); background: #fff }
 .code-block-source { margin: 0 } .mermaid-block .code-block-source { border-bottom-left-radius: 0; border-bottom-right-radius: 0; font-size: 12px }
-.mermaid-preview { border: 1px solid var(--ui-border); border-radius: 8px; padding: 34px 18px 18px; background: #fff; display: flex; justify-content: center; overflow: auto; min-height: 80px }
+.mermaid-preview { border: 1px solid var(--ui-border); border-radius: 8px; padding: 40px 24px 24px; background: #fff; display: flex; justify-content: center; overflow: auto; min-height: 120px }
+.mermaid-svg { width: 100%; display: flex; justify-content: center }
 .mermaid-block .code-block-source { padding-top: 36px }
 .mermaid-preview.empty { color: var(--ui-text-tertiary); font-size: 12px } .mermaid-svg svg { max-width: 100%; height: auto }
 .mermaid-preview.has-error { background: var(--ui-warning-soft) } .mermaid-error { font: 11px "Roboto Mono", monospace; color: var(--ui-warning); white-space: pre-wrap }
 .page.reading .mermaid-block .code-block-head { display: none } .page.reading .mermaid-preview { padding-top: 18px }
+
+.suggestion.removal { border-left-color: var(--ui-danger); background: #fffafa } .suggestion.removal .suggestion-kind { color: var(--ui-danger) }
+
+/* Comments and previews */
+.suggestion.comment { background: #fffdf6; border-color: #efe3c3; border-left-color: #d99a1a } .suggestion.comment .suggestion-kind { color: #a66b00 }
+.tiptap .has-comment::before { content: ""; position: absolute; left: -22px; top: 2px; bottom: 2px; width: 3px; border-radius: 3px; background: repeating-linear-gradient(to bottom, #d99a1a 0 5px, transparent 5px 9px) }
+.review-dot.comment { background: #d99a1a }
+.markdown-preview { font-family: "Noto Sans", sans-serif; font-size: 14px; line-height: 1.55; color: var(--ui-text) }
+.markdown-preview > :first-child { margin-top: 0 } .markdown-preview > :last-child { margin-bottom: 0 } .markdown-preview p { margin: 0 0 10px } .markdown-preview h1, .markdown-preview h2, .markdown-preview h3 { margin: 10px 0 6px; font-size: 1.05em } .markdown-preview ul, .markdown-preview ol { padding-left: 22px; margin: 4px 0 10px } .markdown-preview blockquote { border-left: 3px solid var(--ui-border-strong); margin: 0 0 10px; padding-left: 12px; color: var(--ui-text-secondary) } .markdown-preview pre { background: var(--ui-background-secondary); border: 1px solid var(--ui-border); border-radius: 6px; padding: 10px; font: 12px/1.6 "Roboto Mono", monospace; overflow: auto } .markdown-preview code { font: 12.5px "Roboto Mono", monospace; background: rgba(88,95,112,.07); padding: 1px 4px; border-radius: 3px } .markdown-preview pre code { background: none; padding: 0 } .markdown-preview table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 4px 0 10px } .markdown-preview th, .markdown-preview td { border: 1px solid var(--ui-border); padding: 6px 9px; text-align: left } .markdown-preview th { background: var(--ui-background-secondary) } .markdown-preview img { max-width: 100%; border-radius: 6px } .markdown-preview a { color: var(--ui-primary) }
+.inline-preview { font-size: 15px; line-height: 1.6 }
+.preview-fallback { white-space: pre-wrap; font: 12.5px/1.6 "Roboto Mono", monospace }
+.view-tabs { display: inline-flex; margin-left: auto; gap: 2px; background: #f3f4f8; border-radius: 6px; padding: 2px } .view-tabs button { min-height: 22px; padding: 1px 9px; font-size: 11px; border-radius: 4px } .view-tabs button.on { background: #fff; color: var(--ui-text); box-shadow: 0 1px 2px rgba(28,43,52,.12) }

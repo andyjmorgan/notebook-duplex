@@ -42,6 +42,7 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   for (const a of activity) for (const id of a.blockIds) mark(id, `agent-active agent-${a.state}`, { 'data-agent': `${sessionName(a.sessionId)} · ${a.message || stateLabel[a.state]}${a.progress != null ? ` · ${a.progress}%` : ''}`, style: a.progress != null ? `--progress:${a.progress}%` : '--progress:0%' })
   for (const j of queued) for (const id of j.blockIds) if (!activity.some(a => a.jobId === j.id)) mark(id, 'agent-queued', { 'data-agent': `${j.sessionName ?? 'Claude'} · queued` })
   for (const p of proposals) if (p.type === 'replace' && p.blockId) mark(p.blockId, p.stale ? 'has-suggestion stale' : 'has-suggestion')
+  for (const p of proposals) if (p.type === 'comment' && p.blockId) mark(p.blockId, 'has-comment')
 
   const topLevel = topLevelPositions(doc)
   // Blocks inside a table: lift agent presence onto the table itself, keep the cells quiet.
@@ -64,7 +65,7 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   })
   for (const p of proposals) {
     let at: number | undefined
-    if (p.type === 'replace' && p.blockId) {
+    if ((p.type === 'replace' || p.type === 'comment') && p.blockId) {
       const table = tableOf.get(p.blockId)
       if (table?.attrs?.id && topLevel.has(table.attrs.id)) { const t = topLevel.get(table.attrs.id)!; at = t.pos + t.node.nodeSize }
       else doc.descendants((node, pos) => { if (node.attrs?.id === p.blockId) { at = pos + node.nodeSize; return false } return at === undefined })
