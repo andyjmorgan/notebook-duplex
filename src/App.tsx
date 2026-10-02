@@ -1,0 +1,404 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+import { TableKit } from '@tiptap/extension-table'
+import UniqueID from '@tiptap/extension-unique-id'
+import { Markdown } from '@tiptap/markdown'
+import { Fragment, type ResolvedPos } from '@tiptap/pm/model'
+import { api, apiKey as keyStore, Unauthorized } from './api'
+import type { Proposal, State } from './types'
+import { NotebookAnnotations, annotationsKey, hostFor, releaseHosts } from './editor/annotations'
+import { SuggestionCard } from './components/SuggestionCard'
+import { CommandBar } from './components/CommandBar'
+import { SlashMenu, slashChoices } from './components/SlashMenu'
+import { Toolbar, runAction } from './components/Toolbar'
+import { Outline, type Heading } from './components/Outline'
+import { Rail } from './components/Rail'
+import { KeyGate } from './components/KeyGate'
+
+const initialMarkdown = `Write with your Claude session beside you.
+
+This is your document. Keep writing while Claude researches a claim or drafts a clearer paragraph. Nothing changes until you accept it, right here in the text.
+
+## Try the collaboration
+
+Put the caret in this paragraph and press ⌘K, or type /agent and Space, then ask for a clearer version.
+
+Use the local test suggestion to try the review flow without connecting Claude. Rewrite its target paragraph before accepting to see stale protection.
+
+## A simple table
+
+| Idea | Next step |
+| --- | --- |
+| Write freely | Let the agent work in the margin |
+| Review deliberately | Accept only what helps |
+
+## A note to return to
+
+[tk: Find a primary source about local-first software.]
+`
+const idTypes = ['paragraph', 'heading', 'table', 'tableRow', 'tableCell', 'tableHeader', 'listItem', 'blockquote', 'codeBlock', 'bulletList', 'orderedList']
+const PROOFREAD_INSTRUCTION = 'Proofread the selected paragraph for spelling, grammar, and clarity. Return a replace proposal only if a change helps; otherwise report completion. Preserve the writer’s meaning and voice.'
+
+export function App() {
+  const [key, setKey] = useState(keyStore.get())
+  const [authed, setAuthed] = useState<boolean | null>(key ? null : false)
+  const [gateError, setGateError] = useState('')
+  const [mcpUrl, setMcpUrl] = useState(location.origin + '/mcp')
+  const [state, setState] = useState<State>()
+  const [sessionId, setSessionId] = useState('')
+  const [mode, setMode] = useState<'editing' | 'reading'>('editing')
+  const [saveState, setSaveState] = useState('Opening…')
+  const [connectionLabel, setConnectionLabel] = useState('Connecting')
+  const [toast, setToast] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [proofread, setProofread] = useState(false)
+  const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [, setTick] = useState(0)
+
+  const ready = useRef(false), dirty = useRef(false), syncing = useRef(false), revision = useRef(0), lastEdit = useRef(0)
+  const syncChain = useRef<Promise<void>>(Promise.resolve())
+  const pendingSync = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const proofreadSeen = useRef(new Map<string, string>())
+  const slashRef = useRef({ open: false, index: 0 })
+  const stateRef = useRef<State>(undefined)
+  const pageRef = useRef<HTMLDivElement>(null)
+  const titleRef = useRef<HTMLInputElement>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  stateRef.current = state
+  // Editor key handlers are created once; they reach the latest render through this ref.
+  const live = useRef({ openCommand: (_initial?: string) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined })
+
+  const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
+
+  const editor = useEditor({
+    extensions: [StarterKit, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, NotebookAnnotations],
+    content: initialMarkdown, contentType: 'markdown', editable: false,
+    editorProps: {
+      attributes: { 'aria-label': 'Document', spellcheck: 'true' },
+      handleKeyDown(view, event) {
+        if (slashRef.current.open && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+          event.preventDefault()
+          const choices = slashChoices(view.state.selection.$from.parent.textContent)
+          if (event.key === 'Escape') { slashRef.current.open = false; setTick(t => t + 1) }
+          else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') setSlashIndex(i => (i + (event.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length)
+          else live.current.executeSlash(choices[slashRef.current.index]?.command)
+          return true
+        }
+        if (event.key === ' ' && view.state.selection.$from.parent.textContent === '/agent') {
+          event.preventDefault()
+          const from = view.state.selection.$from.start()
+          view.dispatch(view.state.tr.delete(from, from + 6))
+          live.current.openCommand(); return true
+        }
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); live.current.openCommand(); return true }
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          const id = live.current.currentBlockId()
+          const p = stateRef.current?.proposals.find(x => x.status === 'pending' && !x.stale && x.type === 'replace' && x.blockId === id)
+          if (p) { event.preventDefault(); void live.current.accept(p, p.after ?? ''); return true }
+        }
+        return false
+      },
+    },
+    onUpdate() { if (!ready.current) return; dirty.current = true; lastEdit.current = Date.now(); queueSync() },
+  })
+
+  const view = useEditorState({
+    editor,
+    selector: ({ editor }) => {
+      if (!editor) return null
+      const sel = editor.state.selection
+      const parent = sel.$from.parent
+      const slashText = sel.empty && parent.type.name === 'paragraph' && /^\/[a-z0-9]*$/.test(parent.textContent) ? parent.textContent : ''
+      const headings: Heading[] = []
+      editor.state.doc.descendants((node, pos) => { if (node.type.name === 'heading') headings.push({ id: node.attrs.id, text: node.textContent, level: node.attrs.level, pos }) })
+      return {
+        slashText, from: sel.from, editable: editor.isEditable,
+        flags: { bold: editor.isActive('bold'), italic: editor.isActive('italic'), h1: editor.isActive('heading', { level: 1 }), h2: editor.isActive('heading', { level: 2 }), h3: editor.isActive('heading', { level: 3 }), inTable: editor.isActive('table') },
+        words: editor.getText().trim().split(/\s+/).filter(Boolean).length, headings,
+      }
+    },
+  })
+  const slashOpen = Boolean(view?.slashText) && mode === 'editing' && slashChoices(view!.slashText).length > 0
+  slashRef.current = { open: slashOpen, index: slashIndex }
+  useEffect(() => { setSlashIndex(0) }, [view?.slashText])
+
+  function currentBlockId(): string | undefined {
+    if (!editor) return
+    const textBlockAt = ($pos: ResolvedPos) => {
+      for (let depth = $pos.depth; depth >= 0; depth--) { const node = $pos.node(depth); if (['paragraph', 'heading'].includes(node.type.name) && node.attrs.id) return node.attrs.id as string }
+      // Between blocks (e.g. a click that landed on the editor root): prefer the block just before the position.
+      const near = $pos.nodeBefore ?? $pos.nodeAfter
+      if (near && ['paragraph', 'heading'].includes(near.type.name) && near.attrs.id) return near.attrs.id as string
+    }
+    // Prefer the live DOM selection: a keypress can arrive before ProseMirror has read a fresh click.
+    try {
+      const sel = window.getSelection()
+      if (sel?.anchorNode && editor.view.dom.contains(sel.anchorNode)) {
+        const pos = editor.view.posAtDOM(sel.anchorNode, sel.anchorOffset)
+        const id = textBlockAt(editor.state.doc.resolve(pos))
+        if (id) return id
+      }
+    } catch {}
+    return textBlockAt(editor.state.selection.$from)
+  }
+  function blockPosition(id: string) {
+    let found: { pos: number; size: number } | undefined
+    editor?.state.doc.descendants((node, pos) => { if (!found && node.attrs?.id === id) found = { pos, size: node.nodeSize }; return !found })
+    return found
+  }
+
+  const sync = useCallback(() => {
+    if (!editor) return Promise.resolve()
+    syncChain.current = syncChain.current.then(async () => {
+      syncing.current = true
+      try {
+        const json = editor.getJSON()
+        const saved = await api('/api/sync', { json, markdown: editor.getMarkdown(), title: titleRef.current?.value ?? '', expectedRevision: revision.current })
+        revision.current = saved.revision
+        dirty.current = JSON.stringify(json) !== JSON.stringify(editor.getJSON())
+        setSaveState(dirty.current ? 'Saving…' : 'Saved')
+      } finally { syncing.current = false }
+    }).catch(error => {
+      dirty.current = true
+      if (error instanceof Unauthorized) setAuthed(false)
+      else if (/revision changed/.test(error.message)) void reload()
+      else { setSaveState('Unsaved · server unreachable'); notify(error.message) }
+    })
+    return syncChain.current
+  }, [editor, notify])
+  function queueSync() { clearTimeout(pendingSync.current); setSaveState('Saving…'); pendingSync.current = setTimeout(() => void sync(), 400) }
+  async function flush() { clearTimeout(pendingSync.current); await sync(); if (dirty.current) throw new Error('Your latest change has not saved yet. Try again in a moment.') }
+
+  async function reload() {
+    if (!editor) return
+    const fresh = await api<State>('/api/state')
+    revision.current = fresh.document.revision
+    if (fresh.document.json) editor.commands.setContent(fresh.document.json, { emitUpdate: false })
+    dirty.current = false; setSaveState('Saved')
+    setState(fresh)
+  }
+
+  // Connection and polling
+  useEffect(() => {
+    if (!editor || !key) return
+    let cancelled = false, timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const next = await api<State>('/api/state')
+        if (!cancelled) setState(next)
+      } catch (e) {
+        if (e instanceof Unauthorized) { setAuthed(false); return }
+        setConnectionLabel('Reconnecting…')
+      }
+      timer = setTimeout(poll, 1000)
+    }
+    const connect = async () => {
+      try {
+        const me = await api<{ mcpUrl: string }>('/api/me')
+        setMcpUrl(me.mcpUrl)
+        const initial = await api<State>('/api/state')
+        revision.current = initial.document.revision
+        if (initial.document.json) editor.commands.setContent(initial.document.json, { emitUpdate: false })
+        if (titleRef.current) titleRef.current.value = initial.document.title === 'Untitled' ? 'Working notes' : initial.document.title
+        setAuthed(true); ready.current = true; dirty.current = true
+        editor.setEditable(true)
+        await flush()
+        setState(initial)
+        void poll()
+      } catch (e) {
+        if (e instanceof Unauthorized) { setAuthed(false); setGateError(key ? 'That key was not accepted.' : '') ; return }
+        setConnectionLabel((e as Error).message); setSaveState('Server required')
+        timer = setTimeout(connect, 3000)
+      }
+    }
+    void connect()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [editor, key])
+
+  // Reflect server state into the document
+  useEffect(() => {
+    if (!editor || !state) return
+    const proposals = state.proposals.filter(p => p.status === 'pending')
+    const queued = state.jobs.filter(j => j.status === 'queued')
+    editor.view.dispatch(editor.state.tr.setMeta(annotationsKey, { proposals, activity: state.activity, queued, sessions: state.sessions }).setMeta('addToHistory', false))
+    releaseHosts(new Set(proposals.map(p => p.id)))
+    setTick(t => t + 1)
+    const connected = state.sessions.filter(s => s.connected)
+    if (!connected.some(s => s.id === sessionId)) setSessionId(connected[0]?.id ?? '')
+    const current = connected.find(s => s.id === sessionId) ?? connected[0]
+    setConnectionLabel(current ? `${current.name}${connected.length > 1 ? ` +${connected.length - 1}` : ''}` : 'No Claude connected')
+  }, [state, editor, sessionId])
+
+  useEffect(() => { editor?.setEditable(ready.current && mode === 'editing') }, [editor, mode])
+
+  // Proofreading of settled paragraphs
+  useEffect(() => {
+    if (!proofread || !editor) return
+    const timer = setInterval(async () => {
+      const s = stateRef.current
+      if (!ready.current || busy || dirty.current || syncing.current || Date.now() - lastEdit.current < 2500 || !sessionId || !s) return
+      if (s.jobs.some(j => j.kind === 'proofread' && ['queued', 'running'].includes(j.status))) return
+      const blocks: { id: string; text: string }[] = []
+      editor.state.doc.descendants(node => { if (node.type.name === 'paragraph' && node.attrs.id && node.content.content.every(n => n.isText && !n.marks.length)) { const text = node.textContent; if (text.trim().length > 20 && !text.startsWith('[tk:')) blocks.push({ id: node.attrs.id, text }) } })
+      const block = blocks.find(b => proofreadSeen.current.get(b.id) !== b.text)
+      if (!block) return
+      try { await api('/api/jobs', { instruction: PROOFREAD_INSTRUCTION, blockIds: [block.id], sessionId, kind: 'proofread' }); proofreadSeen.current.set(block.id, block.text) } catch {}
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [proofread, editor, sessionId, busy])
+
+  function openCommand(initial = '') {
+    if (!editor || !ready.current) return
+    if (mode !== 'editing') { notify('Switch to Editing to ask the agent.'); return }
+    const scopeId = currentBlockId()
+    const page = pageRef.current
+    let anchor = { top: 0, left: 0 }
+    if (page) {
+      const rect = page.getBoundingClientRect()
+      const pos = scopeId ? blockPosition(scopeId) : undefined
+      const coords = editor.view.coordsAtPos(pos ? pos.pos + pos.size - 1 : editor.state.selection.from)
+      anchor = { top: coords.bottom - rect.top + 10, left: 0 }
+    }
+    setCommand({ open: true, initial, scopeId, anchor })
+  }
+  function closeCommand() { setCommand(c => ({ ...c, open: false })); editor?.commands.focus() }
+  async function submitCommand(instruction: string, whole: boolean) {
+    await flush()
+    await api('/api/jobs', { instruction, blockIds: whole || !command.scopeId ? [] : [command.scopeId], sessionId })
+    closeCommand()
+    setState(await api<State>('/api/state'))
+  }
+  function runDirective() {
+    const id = currentBlockId(); let text = ''
+    editor?.state.doc.descendants(node => { if (node.attrs?.id === id) text = node.textContent })
+    const directive = text.match(/^\[tk:\s*([\s\S]+?)\]$/)
+    if (!directive) { notify('Place the caret in a paragraph containing [tk: your request].'); return }
+    openCommand(directive[1])
+  }
+  function executeSlash(cmd?: string) {
+    if (!cmd || !editor) return
+    const sel = editor.state.selection
+    const from = sel.$from.start()
+    editor.view.dispatch(editor.state.tr.delete(from, from + sel.$from.parent.content.size))
+    slashRef.current.open = false
+    if (cmd === 'agent') { openCommand(); return }
+    if (cmd === 'h1' || cmd === 'h2' || cmd === 'h3') editor.chain().focus().setHeading({ level: Number(cmd[1]) as 1 | 2 | 3 }).run()
+    else runAction(editor, cmd)
+  }
+
+  async function withBusy(fn: () => Promise<void>) {
+    if (busy) return
+    setBusy(true)
+    try { await fn() } catch (e) { notify((e as Error).message); throw e } finally { setBusy(false); setState(await api<State>('/api/state').catch(() => stateRef.current)) }
+  }
+  const accept = async (proposal: Proposal, edited: string) => withBusy(async () => {
+    if (!editor) return
+    if (mode !== 'editing') throw new Error('Switch to Editing to review changes.')
+    await flush()
+    if (proposal.type === 'insert') {
+      const parsed = editor.markdown?.parse(edited)
+      const nodes = parsed?.content ?? []
+      if (!nodes.length) throw new Error('Nothing to insert.')
+      const result = await api('/api/review', { id: proposal.id, decision: 'accept', nodes, markdown: edited })
+      if (result.stale) { notify('The surrounding text changed, so this addition no longer applies.'); return }
+      const anchor = blockPosition(proposal.anchorBlockId!)
+      if (!anchor) throw new Error('Anchor disappeared. Reloading.')
+      const inserted = (result.inserted as any[]).map(n => editor.schema.nodeFromJSON(n))
+      const at = proposal.placement === 'before' ? anchor.pos : anchor.pos + anchor.size
+      editor.view.dispatch(editor.state.tr.insert(at, Fragment.fromArray(inserted)))
+      revision.current = result.document.revision
+    } else {
+      const result = await api('/api/review', { id: proposal.id, decision: 'accept', text: edited })
+      if (result.stale) { notify('You changed this paragraph, so the suggestion no longer applies.'); return }
+      const target = blockPosition(proposal.blockId!)
+      if (!target) throw new Error('Target disappeared. Reloading.')
+      const text = result.proposal.finalText ?? edited
+      editor.view.dispatch(editor.state.tr.replaceWith(target.pos + 1, target.pos + target.size - 1, text ? editor.schema.text(text) : []))
+      revision.current = result.document.revision
+    }
+    await sync()
+    notify('Accepted. ⌘Z undoes it.')
+  })
+  const reject = async (proposal: Proposal) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'reject' }) })
+  const reconsider = async (proposal: Proposal, feedback: string) => withBusy(async () => { await flush(); await api('/api/review', { id: proposal.id, decision: 'reconsider', feedback }); notify('Sent back with your note.') })
+  const cancelJob = async (id: string) => { await api('/api/cancel', { id }); setState(await api<State>('/api/state')) }
+  const demo = async () => { try { await flush(); await api('/api/demo', { blockId: currentBlockId() }); setState(await api<State>('/api/state')) } catch (e) { notify((e as Error).message) } }
+  function locate(proposal: Proposal) {
+    const id = proposal.type === 'insert' ? proposal.anchorBlockId! : proposal.blockId!
+    const pos = blockPosition(id)
+    if (!pos || !editor) return
+    editor.commands.setTextSelection(pos.pos + 1); editor.commands.scrollIntoView()
+    hostFor(proposal.id).scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+  function jump(pos: number) { if (!editor) return; editor.commands.setTextSelection(pos + 1); editor.commands.scrollIntoView(); if (mode === 'editing') editor.commands.focus() }
+
+  function exportMarkdown() {
+    if (!editor) return
+    const blob = new Blob([editor.getMarkdown()], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob), link = document.createElement('a')
+    link.href = url; link.download = (titleRef.current?.value || 'document').replace(/[^a-z0-9 _-]/gi, '') + '.md'
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  async function importMarkdown(file: File) {
+    if (!editor) return
+    if (!confirm('Replace the current document? Export first if you want to keep it. Basic Markdown and GFM tables round-trip; Obsidian syntax and raw HTML may not.')) return
+    try {
+      editor.commands.setContent(await file.text(), { contentType: 'markdown' })
+      if (titleRef.current) titleRef.current.value = file.name.replace(/\.(md|markdown)$/i, '')
+      dirty.current = true; await flush(); notify('Imported. Check the formatting before exporting.')
+    } catch (e) { notify((e as Error).message) }
+  }
+
+  async function submitKey(value: string) {
+    try { await api('/api/me', undefined, value); keyStore.set(value); setGateError(''); setKey(value); setAuthed(null) }
+    catch (e) { setGateError(e instanceof Unauthorized ? 'That key was not accepted.' : (e as Error).message) }
+  }
+
+  live.current = { openCommand, executeSlash, accept, currentBlockId }
+
+  if (authed === false) return <KeyGate onSubmit={submitKey} error={gateError} />
+  if (!editor) return null
+
+  const pending = state?.proposals.filter(p => p.status === 'pending') ?? []
+  const sessions = state?.sessions ?? []
+  const slashPosition = slashOpen ? (() => { const c = editor.view.coordsAtPos(view!.from); return { top: Math.min(c.bottom + 8, window.innerHeight - 360), left: Math.min(c.left, window.innerWidth - 360) } })() : null
+  const connected = sessions.some(s => s.connected)
+  const working = state?.activity.length ?? 0
+
+  return (
+    <>
+      <header className="appbar">
+        <div className="brand"><span className="logo" aria-hidden>N</span><span>Notebook Duplex</span></div>
+        <div className="connection"><span className={`dot ${connected ? 'connected' : ''} ${working ? 'working' : ''}`} /><span>{connectionLabel}</span><span className="meta-divider" /><span className="save-state">{saveState}</span></div>
+        <div className="header-actions">
+          <div className="segmented" role="radiogroup" aria-label="Mode">
+            <button role="radio" aria-checked={mode === 'editing'} className={mode === 'editing' ? 'on' : ''} onClick={() => setMode('editing')}>Editing</button>
+            <button role="radio" aria-checked={mode === 'reading'} className={mode === 'reading' ? 'on' : ''} onClick={() => setMode('reading')}>Reading</button>
+          </div>
+          <label className="quiet file-button">Import .md<input type="file" accept=".md,.markdown,text/markdown,text/plain" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void importMarkdown(f); e.target.value = '' }} /></label>
+          <button className="quiet" onClick={exportMarkdown}>Export ↗</button>
+        </div>
+      </header>
+      <div className="workspace">
+        <Outline headings={view?.headings ?? []} onJump={jump} words={view?.words ?? 0} />
+        <main className="writing">
+          <div className="document-heading"><input ref={titleRef} aria-label="Document title" defaultValue="Working notes" readOnly={mode !== 'editing'} onInput={() => { dirty.current = true; queueSync() }} /></div>
+          {mode === 'editing' && <Toolbar editor={editor} flags={view?.flags ?? { bold: false, italic: false, h1: false, h2: false, h3: false, inTable: false }} disabled={busy} />}
+          <div className={`page ${mode}`} ref={pageRef}>
+            <EditorContent editor={editor} />
+            <CommandBar open={command.open} anchor={command.anchor} initial={command.initial} scopeLabel={command.scopeId ? 'This paragraph' : 'Around the caret'} sessions={sessions} sessionId={sessionId} onSessionChange={setSessionId} onSubmit={submitCommand} onClose={closeCommand} />
+          </div>
+          <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
+        </main>
+        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); proofreadSeen.current.clear(); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onNotify={notify} />
+      </div>
+      {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} onAccept={accept} onReject={reject} onReconsider={reconsider} />, hostFor(p.id), p.id))}
+      {slashOpen && slashPosition && <SlashMenu query={view!.slashText} index={slashIndex} position={slashPosition} onPick={executeSlash} />}
+      <div id="toast" role="status" aria-live="polite" className={toast ? 'visible' : ''}>{toast}</div>
+    </>
+  )
+}

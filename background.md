@@ -1,5 +1,7 @@
 # Notebook Duplex: conversation background and handover
 
+> **Status, 2 October 2026:** this document describes the original Tauri prototype. The project has since been ported to React and hosted at https://notebook.donkeywork.dev with a hosted MCP endpoint, inline diff suggestions, insert proposals, reconsider round-trips and agent activity in the margin. `README.md` is current; the sections below are kept as history.
+
 Prepared October 2, 2026 for someone taking over this prototype.
 
 This captures the full scope, requests, decisions, implementation status, and outstanding work from the conversation available at handover. It is a consolidated conversation record, not a verbatim transcript of every assistant response or tool output. Earlier implementation turns were retained as summarized history; do not represent this file as an exact transcript.

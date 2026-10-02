@@ -1,0 +1,13 @@
+const KEY = 'notebook-duplex.key'
+export class Unauthorized extends Error { constructor() { super('The notebook key was not accepted.') } }
+export const apiKey = {
+  get: () => { try { return localStorage.getItem(KEY) ?? '' } catch { return '' } },
+  set: (value: string) => { try { if (value) localStorage.setItem(KEY, value); else localStorage.removeItem(KEY) } catch {} },
+}
+export async function api<T = any>(path: string, data?: unknown, key = apiKey.get()): Promise<T> {
+  const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) })
+  if (response.status === 401) throw new Unauthorized()
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.error ?? 'Request failed')
+  return result as T
+}

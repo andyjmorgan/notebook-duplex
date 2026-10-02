@@ -1,0 +1,143 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { chromium } from 'playwright'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { z } from 'zod'
+import { startServer, until } from '../server/test-helpers.mjs'
+
+const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()) }) })
+const shots = process.env.E2E_SHOTS
+
+test('writer and agent collaborate end to end in the browser', async t => {
+  const { url, apiKey, request, output } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
+  const browser = await chromium.launch()
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1440, height: 940 } })
+  const errors = []
+  page.on('pageerror', e => errors.push(e.message))
+  const shot = name => shots ? page.screenshot({ path: `${shots}/${name}.png` }) : Promise.resolve()
+
+  await page.goto(url + '/')
+  await page.fill('input[aria-label="Notebook key"]', 'wrong')
+  await page.click('button[type=submit]')
+  await page.waitForSelector('.gate-error')
+  await page.fill('input[aria-label="Notebook key"]', apiKey)
+  await page.click('button[type=submit]')
+  await page.waitForSelector('.tiptap')
+  await page.evaluate(() => { const w = window; w.__toasts = []; new MutationObserver(() => { const t = document.getElementById('toast')?.textContent; if (t) w.__toasts.push(t) }).observe(document.getElementById('toast'), { childList: true, characterData: true, subtree: true }) })
+  const toasts = () => page.evaluate(() => window.__toasts)
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  const initial = (await request('/api/state')).data
+  const paragraphs = initial.document.json.content.filter(n => n.type === 'paragraph')
+  assert.ok(paragraphs.every(n => n.attrs.id), 'paragraphs carry stable IDs')
+  assert.equal(new Set(paragraphs.map(n => n.attrs.id)).size, paragraphs.length)
+  assert.equal(await page.locator('#toc button').count(), 3)
+
+  // Local fixture: replace + insert proposals rendered inline
+  await page.click('.tiptap > p:nth-of-type(2)')
+  await page.click('button.test-button')
+  await page.waitForSelector('.suggestion.replace')
+  await page.waitForSelector('.suggestion.insert')
+  assert.ok((await page.locator('.suggestion.replace ins').textContent()).includes('local test suggestion'))
+  await shot('inline-suggestions')
+
+  // Edit the insert text, then accept it: content lands after the anchor with new IDs
+  await page.fill('.suggestion.insert textarea', '> Edited by the writer.\n\n- one\n- two')
+  await page.click('.suggestion.insert button:has-text("Accept edited")')
+  await until(async () => (await page.locator('.tiptap blockquote').count()) === 1)
+  assert.equal(await page.locator('.tiptap blockquote').textContent(), 'Edited by the writer.')
+  assert.equal(await page.locator('.tiptap ul li').count(), 2)
+
+  // Typing elsewhere keeps the replace suggestion alive; editing its target makes it stale
+  await page.click('.tiptap > p:nth-of-type(1)')
+  await page.keyboard.press('End')
+  await page.keyboard.type(' Still here.')
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  assert.equal(await page.locator('.suggestion.replace:not(.stale)').count(), 1)
+  await page.click('.tiptap > p:nth-of-type(2)')
+  await page.keyboard.press('End')
+  await page.keyboard.type(' Changed.')
+  await page.waitForSelector('.suggestion.stale', { timeout: 8000 })
+  await shot('stale')
+  await page.click('.suggestion.stale button:has-text("Dismiss")')
+  await until(async () => (await page.locator('.suggestion').count()) === 0)
+
+  // A remote Claude session connects over MCP
+  const notifications = []
+  const client = new Client({ name: 'claude-code', version: '1.0.0' }, { capabilities: {} })
+  client.setNotificationHandler(channel, e => notifications.push(e.params))
+  await client.connect(new StreamableHTTPClientTransport(new URL(url + '/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + apiKey } } }))
+  t.after(() => client.close())
+  await client.callTool({ name: 'identify_session', arguments: { name: 'notebook-duplex', repo: '/home/writer/notebook-duplex' } })
+  await until(async () => (await page.textContent('.connection')).includes('notebook-duplex'))
+
+  // Writer asks from the keyboard without leaving the paragraph
+  await page.click('.tiptap > p:nth-of-type(1)')
+  await page.keyboard.press('Control+k')
+  await page.waitForSelector('.command-bar')
+  await page.keyboard.type('Make this sharper.')
+  await shot('command-bar')
+  await page.keyboard.press('Enter')
+  await page.waitForSelector('.command-bar', { state: 'detached' })
+  const event = await until(() => notifications.find(n => /sharper/.test(n.content)))
+  const jobId = event.meta.job_id
+  await page.waitForSelector('.tiptap .agent-queued')
+
+  // Agent claims, reports progress in the margin, proposes
+  const claim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId } })).content[0].text)
+  const block = claim.snapshot.blocks.find(b => b.id === claim.blockIds[0])
+  await client.callTool({ name: 'set_block_status', arguments: { jobId, state: 'writing', progress: 45, message: 'Tightening the sentence' } })
+  await page.waitForSelector('.tiptap .agent-active')
+  await until(async () => (await page.getAttribute('.tiptap .agent-active', 'data-agent')).includes('45%'))
+  assert.ok((await page.textContent('.rail')).includes('Tightening the sentence'))
+  await shot('agent-working')
+  const after = 'Write beside your Claude session.'
+  const proposal = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId, type: 'replace', blockId: block.id, blockRevision: block.revision, before: block.text, after, explanation: 'Shorter and active.' } })).content[0].text)
+  await client.callTool({ name: 'report_job_status', arguments: { jobId, status: 'completed', message: 'One suggestion.' } })
+  await page.waitForSelector('.suggestion.replace')
+  await page.waitForSelector('.tiptap .agent-active', { state: 'detached' })
+  await shot('agent-suggestion')
+  assert.equal(await page.locator('.suggestion.replace del').count() > 0, true, 'removed words are struck out: ' + await page.locator('.suggestion.replace').first().innerHTML())
+
+  // Reconsider sends a follow-up job with the note
+  await page.click('.suggestion.replace button:has-text("Reconsider")')
+  await page.fill('.reconsider textarea', 'Keep the word session but mention flow.')
+  await page.keyboard.press('Enter')
+  const followUp = await until(() => notifications.find(n => n.meta.job_id !== jobId && /reconsider/i.test(n.content)))
+  const followClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: followUp.meta.job_id } })).content[0].text)
+  assert.match(followClaim.context.feedback, /mention flow/)
+  const revised = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: followUp.meta.job_id, type: 'replace', blockId: block.id, blockRevision: block.revision, before: block.text, after: 'Write in flow, with your Claude session beside you.', explanation: 'Mentions flow.' } })).content[0].text)
+  await page.waitForSelector(`.suggestion-host[data-proposal="${revised.id}"] .suggestion`, { timeout: 8000 }).catch(async e => {
+    await shot('revised-missing')
+    const hosts = await page.evaluate(() => [...document.querySelectorAll('.suggestion-host')].map(h => h.dataset.proposal + ':' + h.children.length))
+    throw new Error(`${e.message}\nrevised=${JSON.stringify(revised)}\nhosts=${JSON.stringify(hosts)}\nserver=${output().slice(-3000)}`)
+  })
+
+  // Accept from the keyboard with the caret in the paragraph; undo restores it
+  await page.click('.tiptap > p:nth-of-type(1)')
+  await page.keyboard.press('Control+Enter')
+  await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()) === 'Write in flow, with your Claude session beside you.').catch(async e => {
+    await shot('accept-missing')
+    throw new Error(`${e.message}\ntoasts=${JSON.stringify(await toasts())}\npara1=${await page.locator('.tiptap > p:nth-of-type(1)').textContent()}\nproposals=${JSON.stringify((await request('/api/state')).data.proposals.map(p => [p.id.slice(0, 8), p.type, p.status, p.stale, p.blockId?.slice(0, 8)]))}\nserver=${output().slice(-800)}`)
+  })
+  await until(async () => (await page.locator('.suggestion').count()) === 0)
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  assert.equal((await request('/api/state')).data.document.json.content[0].content[0].text, 'Write in flow, with your Claude session beside you.')
+  await page.keyboard.press('Control+z')
+  await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()).startsWith('Write with your Claude session'))
+
+  // Slash menu inserts a table; reading mode locks the editor
+  await page.click('.tiptap > p:nth-of-type(3)')
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/tab')
+  await page.waitForSelector('#slash-menu [data-slash="table"]')
+  await page.keyboard.press('Enter')
+  assert.equal(await page.locator('.tiptap table').count(), 2)
+  await page.click('.segmented button:has-text("Reading")')
+  assert.equal(await page.getAttribute('.tiptap', 'contenteditable'), 'false')
+  await page.click('.segmented button:has-text("Editing")')
+  assert.equal(await page.getAttribute('.tiptap', 'contenteditable'), 'true')
+  assert.deepEqual(errors, [])
+})
