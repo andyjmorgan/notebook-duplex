@@ -71,7 +71,9 @@ export function channelNotification(job) {
   const scope = job.blockIds.length ? `Scope: block IDs ${job.blockIds.join(', ')}.` : 'Scope: the whole document.'
   const reconsider = job.context?.reconsiders ? ' The writer asked you to reconsider an earlier proposal; the claim result carries their note.' : ''
   const selection = job.context?.selection ? `\nThe writer highlighted this text when asking: "${job.context.selection.slice(0, 600)}"` : ''
-  const tk = job.context?.tk ? `\nThis came from an inline directive written as [tk: ${job.context.tk}] inside the block. Fulfil it in place: propose a replacement for that paragraph with the directive text removed, or an insert after it when the answer needs more than one paragraph.` : ''
+  const tk = job.context?.tk ? (job.context.inline
+    ? `\nThis came from a [tk: ${job.context.tk}] note written inside a paragraph the writer is still working on. Do not rewrite that paragraph: propose an insert after it (type "insert", placement "after") with the content the note asks for. The editor removes the note when the writer accepts.`
+    : `\nThis came from a paragraph that contains only the note [tk: ${job.context.tk}]. Propose a replacement for that paragraph with the note fulfilled, or an insert after it when the answer needs more than one block. The editor removes the note when the writer accepts.`) : ''
   const table = job.context?.table ? '\nThe scope is a whole table. Prefer one replace proposal on the table block itself (its text is GFM Markdown) so the writer reviews a single cell-by-cell diff.' : ''
   return {
     method: 'notifications/claude/channel',

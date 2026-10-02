@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import { TextSelection } from '@tiptap/pm/state'
 import CodeBlock from '@tiptap/extension-code-block'
 import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react'
 
@@ -37,23 +39,63 @@ export function MermaidPreview({ source }: { source: string }) {
   )
 }
 
-function CodeBlockView({ node, updateAttributes, editor }: NodeViewProps) {
+function CodeBlockView({ node, updateAttributes, editor, getPos }: NodeViewProps) {
   const language = (node.attrs.language as string | null) ?? ''
   const isMermaid = language === 'mermaid'
+  const hasSource = node.textContent.trim().length > 0
+  const [tab, setTab] = useState<'diagram' | 'source'>(hasSource ? 'diagram' : 'source')
+  const [editable, setEditable] = useState(editor.isEditable)
+  // Follow the caret: editing the source shows the source, leaving the block shows the diagram.
+  useEffect(() => {
+    if (!isMermaid) return
+    const onSelection = () => {
+      const pos = typeof getPos === 'function' ? getPos() : undefined
+      if (pos === undefined) return
+      const { from, to } = editor.state.selection
+      const current = editor.state.doc.nodeAt(pos)
+      const size = current?.nodeSize ?? node.nodeSize
+      const inside = from >= pos + 1 && to <= pos + size - 1
+      if (inside) setTab('source')
+      else if ((current?.textContent ?? node.textContent).trim()) setTab('diagram')
+    }
+    const onEditable = () => setEditable(editor.isEditable)
+    editor.on('selectionUpdate', onSelection); editor.on('update', onEditable); editor.on('transaction', onEditable)
+    return () => { editor.off('selectionUpdate', onSelection); editor.off('update', onEditable); editor.off('transaction', onEditable) }
+  }, [editor, getPos, isMermaid, node])
+  const focusSource = () => {
+    flushSync(() => setTab('source'))
+    const pos = typeof getPos === 'function' ? getPos() : undefined
+    if (pos === undefined) return
+    const end = pos + (editor.state.doc.nodeAt(pos)?.nodeSize ?? node.nodeSize) - 1
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, end)).scrollIntoView())
+    editor.view.focus()
+  }
+  const showSource = !isMermaid || tab === 'source'
   return (
-    <NodeViewWrapper className={`code-block ${isMermaid ? 'mermaid-block' : ''}`}>
+    <NodeViewWrapper className={`code-block ${isMermaid ? 'mermaid-block' : ''} ${isMermaid && tab === 'diagram' ? 'showing-diagram' : ''}`}>
       <div className="code-block-head" contentEditable={false}>
-        <select value={language} aria-label="Language" disabled={!editor.isEditable} onChange={e => updateAttributes({ language: e.target.value || null })}>
+        {isMermaid && editable && (
+          <div className="code-tabs" role="tablist" aria-label="Diagram view">
+            <button role="tab" aria-selected={tab === 'diagram'} className={tab === 'diagram' ? 'on' : ''} onMouseDown={e => e.preventDefault()} onClick={() => setTab('diagram')} disabled={!hasSource}>Diagram</button>
+            <button role="tab" aria-selected={tab === 'source'} className={tab === 'source' ? 'on' : ''} onMouseDown={e => e.preventDefault()} onClick={focusSource}>Source</button>
+          </div>
+        )}
+        <select value={language} aria-label="Language" disabled={!editable} onChange={e => updateAttributes({ language: e.target.value || null })}>
           <option value="">plain</option>
           {['mermaid', 'bash', 'json', 'yaml', 'typescript', 'javascript', 'python', 'go', 'rust', 'csharp', 'sql', 'html', 'css', 'markdown'].map(l => <option key={l} value={l}>{l === 'mermaid' ? 'mermaid diagram' : l}</option>)}
         </select>
       </div>
-      <pre className="code-block-source"><NodeViewContent as={'code' as never} /></pre>
-      {isMermaid && <MermaidPreview source={node.textContent} />}
+      <pre className="code-block-source" hidden={isMermaid && (!showSource || !editable)}><NodeViewContent as={'code' as never} /></pre>
+      {isMermaid && (tab === 'diagram' || !editable) && <div onDoubleClick={editable ? focusSource : undefined} title={editable ? 'Double-click to edit the source' : undefined}><MermaidPreview source={node.textContent} /></div>}
     </NodeViewWrapper>
   )
 }
 
 export const NotebookCodeBlock = CodeBlock.extend({
-  addNodeView() { return ReactNodeViewRenderer(CodeBlockView) },
+  addNodeView() {
+    return ReactNodeViewRenderer(CodeBlockView, {
+      // Tabs, the language select and the diagram are ours; keep ProseMirror from treating clicks on them as caret placement.
+      stopEvent: ({ event }) => Boolean((event.target as HTMLElement | null)?.closest?.('.code-block-head, .mermaid-preview')),
+    })
+  },
 })

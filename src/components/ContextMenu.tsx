@@ -6,8 +6,10 @@ export function ContextMenu({ position, items, onClose }: { position: { x: numbe
   useEffect(() => {
     if (!position) return
     const close = (e: Event) => { if (e instanceof KeyboardEvent && e.key !== 'Escape') return; if (e instanceof MouseEvent && ref.current?.contains(e.target as Node)) return; onClose() }
-    document.addEventListener('mousedown', close); document.addEventListener('keydown', close); window.addEventListener('scroll', onClose, { passive: true, once: true }); window.addEventListener('blur', onClose)
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close); window.removeEventListener('scroll', onClose); window.removeEventListener('blur', onClose) }
+    const startY = window.scrollY
+    const onScroll = () => { if (Math.abs(window.scrollY - startY) > 24) onClose() }
+    document.addEventListener('mousedown', close); document.addEventListener('keydown', close); window.addEventListener('scroll', onScroll, { passive: true }); window.addEventListener('blur', onClose)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', close); window.removeEventListener('scroll', onScroll); window.removeEventListener('blur', onClose) }
   }, [position, onClose])
   useEffect(() => {
     if (!position || !ref.current) return

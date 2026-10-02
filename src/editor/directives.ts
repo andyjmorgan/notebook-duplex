@@ -3,7 +3,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as PMNode } from '@tiptap/pm/model'
 
-export type Directive = { blockId: string; text: string; from: number; to: number; complete: boolean }
+export type Directive = { blockId: string; text: string; from: number; to: number; complete: boolean; inline: boolean }
 export type DirectiveStatus = Map<string, 'queued' | 'working' | 'done' | 'failed'>
 export const directiveKey = (d: { blockId: string; text: string }) => `${d.blockId}|${d.text}`
 export const directivesPluginKey = new PluginKey<DirectiveStatus>('tk-directives')
@@ -19,7 +19,7 @@ export function findDirectives(doc: PMNode): Directive[] {
     let match: RegExpExecArray | null
     while ((match = pattern.exec(text))) {
       const complete = match[2] === ']'
-      found.push({ blockId: node.attrs.id, text: match[1].trim(), from: pos + 1 + match.index, to: pos + 1 + match.index + match[0].length, complete })
+      found.push({ blockId: node.attrs.id, text: match[1].trim(), from: pos + 1 + match.index, to: pos + 1 + match.index + match[0].length, complete, inline: text.trim() !== match[0].trim() })
     }
   })
   return found

@@ -194,9 +194,11 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 
 /* Code blocks and Mermaid diagrams */
 .code-block { position: relative; margin: 8px 0 18px }
-.code-block-head { position: absolute; top: 6px; right: 8px; z-index: 1 } .code-block-head select { width: auto; font-size: 10px; padding: 2px 6px; border-color: transparent; background: transparent; color: var(--ui-text-tertiary) } .code-block:hover .code-block-head select, .code-block-head select:focus { border-color: var(--ui-border); background: #fff }
+.code-block-head { position: absolute; top: 6px; right: 8px; z-index: 1; display: flex; align-items: center; gap: 8px }
+.code-tabs { display: inline-flex; background: #fff; border: 1px solid var(--ui-border); border-radius: 6px; padding: 2px } .code-tabs button { font-size: 10.5px; padding: 1px 9px; min-height: 20px; border-radius: 4px; color: var(--ui-text-secondary) } .code-tabs button.on { background: var(--ui-brand-soft); color: var(--ui-brand-contrast) } .code-block-head select { width: auto; font-size: 10px; padding: 2px 6px; border-color: transparent; background: transparent; color: var(--ui-text-tertiary) } .code-block:hover .code-block-head select, .code-block-head select:focus { border-color: var(--ui-border); background: #fff }
 .code-block-source { margin: 0 } .mermaid-block .code-block-source { border-bottom-left-radius: 0; border-bottom-right-radius: 0; font-size: 12px }
-.mermaid-preview { border: 1px solid var(--ui-border); border-top: 0; border-radius: 0 0 8px 8px; padding: 18px; background: #fff; display: flex; justify-content: center; overflow: auto }
+.mermaid-preview { border: 1px solid var(--ui-border); border-radius: 8px; padding: 34px 18px 18px; background: #fff; display: flex; justify-content: center; overflow: auto; min-height: 80px }
+.mermaid-block .code-block-source { padding-top: 36px }
 .mermaid-preview.empty { color: var(--ui-text-tertiary); font-size: 12px } .mermaid-svg svg { max-width: 100%; height: auto }
 .mermaid-preview.has-error { background: var(--ui-warning-soft) } .mermaid-error { font: 11px "Roboto Mono", monospace; color: var(--ui-warning); white-space: pre-wrap }
-.page.reading .mermaid-block .code-block-source, .page.reading .mermaid-block .code-block-head { display: none } .page.reading .mermaid-preview { border-top: 1px solid var(--ui-border); border-radius: 8px }
+.page.reading .mermaid-block .code-block-head { display: none } .page.reading .mermaid-preview { padding-top: 18px }

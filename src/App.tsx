@@ -354,6 +354,14 @@ export function App() {
       else { const text = result.proposal.finalText ?? edited; editor.view.dispatch(editor.state.tr.replaceWith(target.pos + 1, target.pos + target.size - 1, text ? editor.schema.text(text) : [])) }
       revision.current = result.document.revision
     }
+    const job = stateRef.current?.jobs.find(j => j.id === proposal.jobId)
+    if (job?.directive) {
+      const chip = findDirectives(editor.state.doc).find(d => d.complete && d.text === job.directive && (d.blockId === job.blockIds[0] || true))
+      if (chip) {
+        const before = editor.state.doc.textBetween(Math.max(chip.from - 1, 0), chip.from)
+        editor.view.dispatch(editor.state.tr.delete(before === ' ' ? chip.from - 1 : chip.from, chip.to))
+      }
+    }
     await sync()
     notify('Accepted. ⌘Z undoes it.')
   })
@@ -399,8 +407,9 @@ export function App() {
       firedDirectives.current.add(directiveKey(d))
       void (async () => {
         try {
-          await flush()
-          await api('/api/jobs', { instruction: d.text, blockIds: [d.blockId], sessionId, context: { tk: d.text } })
+          clearTimeout(pendingSync.current)
+          await sync().catch(() => {})
+          await api('/api/jobs', { instruction: d.text, blockIds: [d.blockId], sessionId, context: { tk: d.text, inline: d.inline } })
           setState(await api<State>('/api/state'))
         } catch (e) { firedDirectives.current.delete(directiveKey(d)); notify((e as Error).message) }
       })()
