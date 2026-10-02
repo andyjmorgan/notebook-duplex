@@ -43,6 +43,7 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   for (const j of queued) for (const id of j.blockIds) if (!activity.some(a => a.jobId === j.id)) mark(id, 'agent-queued', { 'data-agent': `${j.sessionName ?? 'Claude'} · queued` })
   for (const p of proposals) if (p.type === 'replace' && p.blockId) mark(p.blockId, p.stale ? 'has-suggestion stale' : 'has-suggestion')
   for (const p of proposals) if (p.type === 'comment' && p.blockId) mark(p.blockId, 'has-comment')
+  for (const p of proposals) if (p.type === 'move') for (const id of p.blockIds ?? []) mark(id, 'will-move')
 
   const topLevel = topLevelPositions(doc)
   // Blocks inside a table: lift agent presence onto the table itself, keep the cells quiet.
@@ -69,7 +70,7 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
       const table = tableOf.get(p.blockId)
       if (table?.attrs?.id && topLevel.has(table.attrs.id)) { const t = topLevel.get(table.attrs.id)!; at = t.pos + t.node.nodeSize }
       else doc.descendants((node, pos) => { if (node.attrs?.id === p.blockId) { at = pos + node.nodeSize; return false } return at === undefined })
-    } else if (p.type === 'insert' && p.anchorBlockId) {
+    } else if ((p.type === 'insert' || p.type === 'move') && p.anchorBlockId) {
       const anchor = topLevel.get(p.anchorBlockId)
       if (anchor) at = p.placement === 'before' ? anchor.pos : anchor.pos + anchor.node.nodeSize
     }

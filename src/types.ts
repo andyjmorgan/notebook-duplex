@@ -1,6 +1,6 @@
 export type Block = { id: string; type: string; text: string; revision: string; plain: boolean; topLevelId?: string }
 export type Proposal = {
-  id: string; type: 'replace' | 'insert' | 'comment'; jobId: string; text?: string; sessionId: string; explanation: string
+  id: string; type: 'replace' | 'insert' | 'comment' | 'move'; jobId: string; text?: string; blockIds?: string[]; preview?: string[]; anchorText?: string; sessionId: string; explanation: string
   status: string; stale: boolean; createdAt: number
   blockId?: string; blockType?: string; blockRevision?: string; before?: string; after?: string
   anchorBlockId?: string; placement?: 'before' | 'after'; markdown?: string

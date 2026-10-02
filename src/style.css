@@ -215,3 +215,7 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 .inline-preview { font-size: 15px; line-height: 1.6 }
 .preview-fallback { white-space: pre-wrap; font: 12.5px/1.6 "Roboto Mono", monospace }
 .view-tabs { display: inline-flex; margin-left: auto; gap: 2px; background: #f3f4f8; border-radius: 6px; padding: 2px } .view-tabs button { min-height: 22px; padding: 1px 9px; font-size: 11px; border-radius: 4px } .view-tabs button.on { background: #fff; color: var(--ui-text); box-shadow: 0 1px 2px rgba(28,43,52,.12) }
+
+.suggestion.move { background: #f6fbff; border-color: #cfe5f6; border-left-color: var(--ui-primary) } .suggestion.move .suggestion-kind { color: var(--ui-primary) }
+.move-preview { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--ui-text-secondary) } .move-preview li { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tiptap .will-move { outline: 1px dashed #9cc6e8; outline-offset: 4px; border-radius: 4px } .review-dot.move { background: var(--ui-primary) }

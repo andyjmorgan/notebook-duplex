@@ -136,7 +136,7 @@ export function initialState() {
 }
 
 export class Store {
-  constructor(state = initialState()) { this.state = { ...initialState(), ...state }; this.state.activity ??= {} }
+  constructor(state = initialState(), { isLiveSession = () => true } = {}) { this.state = { ...initialState(), ...state }; this.state.activity ??= {}; this.isLiveSession = isLiveSession }
 
   sync({ json, markdown, title, expectedRevision }) {
     if (expectedRevision !== this.state.document.revision) throw new Error('Document revision changed; reload before syncing.')
@@ -172,14 +172,46 @@ export class Store {
     if (!job || job.sessionId !== sessionId) throw new Error('Job does not belong to this session')
     return job
   }
+  // A scoped cell brings its table into scope, and a scoped table brings its cells.
+  inScope(job, block) {
+    if (!job.blockIds.length) return true
+    if (job.blockIds.includes(block.id)) return true
+    if (block.topLevelId && job.blockIds.includes(block.topLevelId)) return true
+    return job.snapshot.blocks.some(b => job.blockIds.includes(b.id) && b.topLevelId === block.id)
+  }
+  // Orphaned jobs (their session died with a restart or disconnect) can be adopted by a live session.
+  adoptable(job, sessionId) { return job.sessionId !== sessionId && !this.isLiveSession(job.sessionId) && ['queued', 'running', 'needs_permission'].includes(job.status) }
+  blocksAround(job, radius = 2) {
+    const blocks = job.snapshot.blocks
+    if (!job.blockIds.length) return blocks
+    const keep = new Set()
+    for (const id of job.blockIds) {
+      const index = blocks.findIndex(b => b.id === id)
+      if (index === -1) continue
+      for (let i = Math.max(0, index - radius); i <= Math.min(blocks.length - 1, index + radius); i++) keep.add(blocks[i].id)
+      const top = blocks[index].topLevelId
+      for (const b of blocks) if (b.topLevelId && (b.topLevelId === top || b.topLevelId === id)) keep.add(b.id)
+    }
+    return blocks.filter(b => keep.has(b.id))
+  }
 
-  claim(id, sessionId) {
-    const job = this.job(id, sessionId)
+  claim(id, sessionId, { full = false } = {}) {
+    let job = this.state.jobs.find(j => j.id === id)
+    let reclaimed = false
+    if (job && this.adoptable(job, sessionId)) { job.sessionId = sessionId; reclaimed = true }
+    job = this.job(id, sessionId)
     if (job.status === 'queued') { job.status = 'running'; job.acknowledgedAt = Date.now() }
     else if (job.status !== 'running') throw new Error('Job is no longer available')
     if (!this.state.activity[job.id]) this.state.activity[job.id] = { jobId: job.id, sessionId, blockIds: job.blockIds, state: 'reading', progress: null, message: 'Reading the document', updatedAt: Date.now() }
+    else this.state.activity[job.id].sessionId = sessionId
     const { snapshot, ...rest } = job
-    return { ...rest, snapshot, context: job.context }
+    const scoped = full || !job.blockIds.length ? snapshot.blocks : this.blocksAround(job)
+    return { ...rest, reclaimed: reclaimed || undefined, context: job.context, snapshot: { id: snapshot.id, revision: snapshot.revision, title: snapshot.title, totalBlocks: snapshot.blocks.length, blocks: scoped, truncated: scoped.length < snapshot.blocks.length || undefined } }
+  }
+  blocks(id, sessionId, blockIds) {
+    const job = this.job(id, sessionId)
+    const wanted = new Set(blockIds ?? [])
+    return { blocks: job.snapshot.blocks.filter(b => wanted.has(b.id)) }
   }
 
   activity(id, sessionId, { blockIds, state, progress, message }) {
@@ -191,17 +223,19 @@ export class Store {
     const pct = progress == null ? null : Math.max(0, Math.min(100, Math.round(Number(progress))))
     if (pct !== null && Number.isNaN(pct)) throw new Error('Progress must be a number from 0 to 100')
     this.state.activity[job.id] = { jobId: job.id, sessionId, blockIds: ids, state, progress: pct, message: String(message ?? '').slice(0, 200), updatedAt: Date.now() }
-    return this.state.activity[job.id]
+    return { jobId: job.id, state, progress: pct, blockIds: ids, updatedAt: this.state.activity[job.id].updatedAt }
   }
 
   propose(input, sessionId) {
     const job = this.job(input.jobId, sessionId)
-    if (job.status !== 'running') throw new Error('Claim this job before proposing changes.')
-    const type = input.type ?? 'replace'
+    if (job.status === 'completed' && Date.now() - (job.finishedAt ?? 0) < 120000) { job.status = 'running'; delete job.finishedAt }
+    if (job.status !== 'running') throw new Error(job.status === 'completed' ? 'This job closed more than two minutes ago; wait for the writer\'s next command.' : 'Claim this job before proposing changes.')
+    let type = input.type ?? 'replace'
+    if (type === 'delete') { type = 'replace'; input = { ...input, after: '' } }
     const base = { id: randomUUID(), type, jobId: job.id, sessionId, documentId: job.documentId, explanation: String(input.explanation ?? '').slice(0, 4000), status: 'pending', createdAt: Date.now() }
     if (type === 'replace') {
       const block = job.snapshot.blocks.find(b => b.id === input.blockId)
-      if (!block || (job.blockIds.length && !job.blockIds.includes(block.id))) throw new Error('Target outside job scope')
+      if (!block || !this.inScope(job, block)) throw new Error('Target outside job scope')
       if (block.type === 'table' && !block.plain) throw new Error('This table has formatted or nested cells; propose an insert with a new table instead.')
       if (input.before !== block.text || input.blockRevision !== block.revision) throw new Error('Proposal must match the job snapshot: use before and blockRevision from claim_job.')
       if (block.type === 'table') parseTableMarkdown(input.after); else validateText(input.after)
@@ -217,6 +251,23 @@ export class Store {
       if (!['before', 'after'].includes(input.placement ?? 'after')) throw new Error('placement must be before or after')
       if (typeof input.markdown !== 'string' || !input.markdown.trim() || input.markdown.length > 50000) throw new Error('markdown must be non-empty and under 50,000 characters')
       const proposal = { ...base, anchorBlockId: anchor.topLevelId ?? anchor.id, placement: input.placement ?? 'after', markdown: input.markdown }
+      this.state.proposals.push(proposal)
+      return proposal
+    }
+    if (type === 'move') {
+      const ids = [...new Set(input.blockIds ?? [])]
+      if (!ids.length) throw new Error('move needs blockIds: a contiguous run of top-level blocks')
+      const order = (job.snapshot.json?.content ?? []).map(n => n.attrs?.id)
+      const indexes = ids.map(id => order.indexOf(id))
+      if (indexes.some(i => i === -1)) throw new Error('move blockIds must be top-level blocks from the job snapshot')
+      indexes.sort((a, b) => a - b)
+      if (indexes[indexes.length - 1] - indexes[0] !== indexes.length - 1) throw new Error('move blockIds must be contiguous')
+      const anchorIndex = order.indexOf(input.anchorBlockId)
+      if (anchorIndex === -1 || indexes.includes(anchorIndex)) throw new Error('anchorBlockId must be a top-level block outside the moved run')
+      if (!['before', 'after'].includes(input.placement ?? 'after')) throw new Error('placement must be before or after')
+      const moved = indexes.map(i => order[i])
+      const preview = moved.map(id => job.snapshot.blocks.find(b => b.id === id)?.text ?? '').filter(Boolean)
+      const proposal = { ...base, blockIds: moved, anchorBlockId: input.anchorBlockId, placement: input.placement ?? 'after', preview, anchorText: job.snapshot.blocks.find(b => b.id === input.anchorBlockId)?.text ?? '' }
       this.state.proposals.push(proposal)
       return proposal
     }
@@ -239,7 +290,9 @@ export class Store {
     job.message = String(message ?? '').slice(0, 4000)
     if (status === 'running') job.status = 'running'
     else this.finish(job, status)
-    return job
+    const proposals = this.state.proposals.filter(p => p.jobId === job.id).length
+    const hint = status === 'completed' && !proposals && job.kind === 'command' ? 'Completed without any proposal. If you had something to tell the writer, you can still add a comment proposal for two minutes.' : undefined
+    return { jobId: job.id, status: job.status, proposals, updatedAt: Date.now(), hint }
   }
 
   finish(job, status) {
@@ -260,6 +313,11 @@ export class Store {
     if (!doc) return true
     if (proposal.type === 'insert') return topLevelIndex(doc, proposal.anchorBlockId) === -1
     if (proposal.type === 'comment') return !findNode(doc, proposal.blockId)
+    if (proposal.type === 'move') {
+      const order = (doc.content ?? []).map(n => n.attrs?.id)
+      const idx = proposal.blockIds.map(id => order.indexOf(id))
+      return idx.some(i => i === -1) || order.indexOf(proposal.anchorBlockId) === -1 || idx[idx.length - 1] - idx[0] !== idx.length - 1
+    }
     const node = findNode(doc, proposal.blockId)
     return !node || hash(node) !== proposal.blockRevision || blockText(node) !== proposal.before
   }
@@ -277,6 +335,17 @@ export class Store {
     if (decision !== 'accept') throw new Error('Invalid review decision')
     if (this.isStale(proposal)) { proposal.status = 'stale'; return { proposal, stale: true } }
     const doc = this.state.document.json
+    if (proposal.type === 'move') {
+      const order = doc.content.map(n => n.attrs?.id)
+      const first = order.indexOf(proposal.blockIds[0])
+      const run = doc.content.splice(first, proposal.blockIds.length)
+      const anchorIndex = doc.content.findIndex(n => n.attrs?.id === proposal.anchorBlockId)
+      doc.content.splice(proposal.placement === 'before' ? anchorIndex : anchorIndex + 1, 0, ...run)
+      this.state.document.revision++
+      proposal.status = 'accepted'
+      proposal.reviewedAt = Date.now()
+      return { proposal, document: this.state.document, moved: run }
+    }
     if (proposal.type === 'insert') {
       const nodes = options.nodes
       if (!Array.isArray(nodes) || !nodes.length) throw new Error('Insert acceptance requires the parsed content nodes')
@@ -351,6 +420,9 @@ export class Store {
     const job = this.enqueue({ instruction, blockIds: original.blockIds.length ? original.blockIds : [proposal.blockId], sessionId: original.sessionId, sessionName: original.sessionName, kind: original.kind, context: { repliesTo: proposal.id, comment: proposal.text, feedback: proposal.feedback } })
     return { proposal, job }
   }
+
+  orphans() { return this.state.jobs.filter(j => ['queued', 'running', 'needs_permission'].includes(j.status) && !this.isLiveSession(j.sessionId)) }
+  reassign(job, sessionId) { job.sessionId = sessionId; if (this.state.activity[job.id]) this.state.activity[job.id].sessionId = sessionId; job.status = 'queued'; delete job.notifiedAt }
 
   view() {
     return {

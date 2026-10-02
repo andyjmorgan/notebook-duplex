@@ -28,6 +28,23 @@ export function SuggestionCard({ proposal, session, busy, parseMarkdown, onAccep
   const removal = proposal.type === 'replace' && (proposal.after ?? '') === ''
   const kind = proposal.type === 'comment' ? (proposal.stale ? 'Comment · section removed' : 'Comment') : proposal.stale ? (proposal.blockType === 'table' ? 'Table changed' : 'Paragraph changed') : proposal.type === 'insert' ? 'Suggested addition' : removal ? 'Suggested removal' : proposal.blockType === 'table' ? 'Suggested table edit' : 'Suggested edit'
 
+  if (proposal.type === 'move') {
+    return (
+      <aside className={`suggestion move ${proposal.stale ? 'stale' : ''}`} aria-label="Suggested move">
+        <header className="suggestion-head"><span className="suggestion-kind">{proposal.stale ? 'Move no longer applies' : 'Suggested move'}</span><span className="suggestion-who">{who}</span></header>
+        <p className="suggestion-text">Move {proposal.blockIds?.length === 1 ? 'this block' : `these ${proposal.blockIds?.length} blocks`} to {proposal.placement === 'before' ? 'just before' : 'just after'} “{(proposal.anchorText ?? '').slice(0, 60)}”:</p>
+        <ul className="move-preview">{(proposal.preview ?? []).slice(0, 6).map((t, i) => <li key={i}>{t.slice(0, 90)}</li>)}{(proposal.preview?.length ?? 0) > 6 && <li>…</li>}</ul>
+        {proposal.explanation && <p className="suggestion-why">{proposal.explanation}</p>}
+        <div className="suggestion-actions">
+          {proposal.stale ? <button className="quiet small" disabled={busy} onClick={() => run(() => onReject(proposal))}>Dismiss</button> : <>
+            <button className="primary small" disabled={busy} onClick={() => run(() => onAccept(proposal, ''))}>Move</button>
+            <button className="quiet small" disabled={busy} onClick={() => run(() => onReject(proposal))}>Reject</button>
+          </>}
+        </div>
+        {error && <p className="suggestion-error" role="alert">{error}</p>}
+      </aside>
+    )
+  }
   if (proposal.type === 'comment') {
     return (
       <aside className={`suggestion comment ${proposal.stale ? 'stale' : ''}`} aria-label="Comment" onKeyDown={e => { if (e.key === 'Escape' && mode !== 'view') { e.stopPropagation(); setMode('view') } }}>

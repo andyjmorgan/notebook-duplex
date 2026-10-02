@@ -281,7 +281,9 @@ export function App() {
           if (ids.length && text.trim().length > 20) units.push({ key: top.attrs.id, text, blockIds: [top.attrs.id, ...ids], table: true })
         } else top.descendants(n => { if (n.type.name === 'paragraph' && n.attrs.id && n.content.content.every(c => c.isText && !c.marks.length)) { const text = n.textContent; if (text.trim().length > 20 && !/\[tk:/.test(text)) units.push({ key: n.attrs.id, text, blockIds: [n.attrs.id], table: false }) } })
       })
-      const unit = units.find(u => proofreadSeen.current.get(u.key) !== u.text)
+      const busyBlocks = new Set(s.proposals.filter(p => p.status === 'pending').flatMap(p => [p.blockId, p.anchorBlockId, ...(p.blockIds ?? [])]).filter(Boolean) as string[])
+      for (const j of s.jobs) if (j.kind === 'proofread' && !['queued', 'running'].includes(j.status)) for (const id of j.blockIds) { const u = units.find(x => x.key === id || x.blockIds.includes(id)); if (u && !proofreadSeen.current.has(u.key)) proofreadSeen.current.set(u.key, u.text) }
+      const unit = units.find(u => proofreadSeen.current.get(u.key) !== u.text && !u.blockIds.some(id => busyBlocks.has(id)))
       if (!unit) return
       try { await api('/api/jobs', { instruction: unit.table ? PROOFREAD_TABLE_INSTRUCTION : PROOFREAD_INSTRUCTION, blockIds: unit.blockIds, sessionId, kind: 'proofread', context: unit.table ? { table: true } : undefined }); proofreadSeen.current.set(unit.key, unit.text) } catch {}
     }, 2500)
@@ -341,6 +343,24 @@ export function App() {
     if (!editor) return
     if (mode !== 'editing') throw new Error('Switch to Editing to review changes.')
     await flush()
+    if (proposal.type === 'move') {
+      const result = await api('/api/review', { id: proposal.id, decision: 'accept' })
+      if (result.stale) { notify('The blocks or anchor changed, so this move no longer applies.'); return }
+      setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'accepted' } : p) })
+      const ids = proposal.blockIds ?? []
+      const first = blockPosition(ids[0]), last = blockPosition(ids[ids.length - 1])
+      if (!first || !last) throw new Error('Blocks disappeared. Reloading.')
+      const slice = editor.state.doc.slice(first.pos, last.pos + last.size)
+      let tr = editor.state.tr.delete(first.pos, last.pos + last.size)
+      const anchor = (() => { let found: { pos: number; size: number } | undefined; tr.doc.descendants((node, pos) => { if (!found && node.attrs?.id === proposal.anchorBlockId) found = { pos, size: node.nodeSize }; return !found }); return found })()
+      if (!anchor) throw new Error('Anchor disappeared. Reloading.')
+      tr = tr.insert(proposal.placement === 'before' ? anchor.pos : anchor.pos + anchor.size, slice.content)
+      editor.view.dispatch(tr)
+      revision.current = result.document.revision
+      dirty.current = false; setSaveState('Saved'); queueSync()
+      notify('Moved. ⌘Z undoes it.')
+      return
+    }
     if (proposal.type === 'insert') {
       const parsed = editor.markdown?.parse(edited)
       const nodes = parsed?.content ?? []
@@ -396,7 +416,7 @@ export function App() {
   const cancelJob = async (id: string) => { await api('/api/cancel', { id }); void refresh() }
   const demo = async () => { try { await flush(); await api('/api/demo', { blockId: currentBlockId() }); void refresh() } catch (e) { notify((e as Error).message) } }
   function locate(proposal: Proposal) {
-    const id = proposal.type === 'insert' ? proposal.anchorBlockId! : proposal.blockId!
+    const id = proposal.type === 'insert' || proposal.type === 'move' ? proposal.anchorBlockId! : proposal.blockId!
     const pos = blockPosition(id)
     if (!pos || !editor) return
     editor.commands.setTextSelection(pos.pos + 1); editor.commands.scrollIntoView()
@@ -521,7 +541,7 @@ export function App() {
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>
-        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); proofreadSeen.current.clear(); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onNotify={notify} />
+        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onNotify={notify} />
       </div>
       {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />

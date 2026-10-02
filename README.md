@@ -41,11 +41,12 @@ Claude receives each command as a `notifications/claude/channel` event over the 
 | --- | --- |
 | `identify_session` | Name the session and report its working directory |
 | `list_jobs` | Queued and running jobs for this session, in case a notification was missed |
-| `claim_job` | Acknowledge a job and read its immutable snapshot (block IDs, text, revisions, any reconsideration note) |
-| `get_document_snapshot` | Re-read a job snapshot or the live document |
+| `claim_job` | Acknowledge a job and read the scoped blocks plus two neighbours (whole tables included), with revisions and any reconsideration or reply context; `full: true` for everything. Adopts jobs orphaned by a restart |
+| `get_blocks` | Read specific snapshot blocks by ID |
+| `get_document_snapshot` | The whole snapshot or live document, including JSON. Large; use sparingly |
 | `set_block_status` | Mark blocks as `reading`, `thinking`, `writing`, `waiting` or `done`, with optional progress and message |
-| `propose_changes` | `replace` a paragraph, heading or table (inline or GFM Markdown in and out; empty removes the block), `insert` Markdown before or after an anchor, or `comment` on a block |
-| `report_job_status` | `running`, `completed`, `failed` or `needs_permission` |
+| `propose_changes` | `replace` a paragraph, heading or table (inline or GFM Markdown in and out), `delete` a block, `move` a contiguous run of top-level blocks, `insert` Markdown before or after an anchor, or `comment` on a block |
+| `report_job_status` | `running`, `completed`, `failed` or `needs_permission`; returns a small status record. A completed job still accepts proposals for two minutes |
 
 There is no accept tool. The server verifies every proposal against the job snapshot, and acceptance checks the target's revision again at review time.
 
@@ -91,6 +92,6 @@ The end-to-end test covers the key gate, inline replace and insert proposals, ed
 - One notebook per deployment, single writer. No CRDT or simultaneous editing.
 - Replace proposals cover paragraphs, headings and tables. Code blocks and diagrams can be inserted but not rewritten in place yet.
 - Tool permission and trust prompts stay in Claude's terminal. Channels are a Claude Code research preview and need the development-channel flag; organisation policy can disable them.
-- Cancelling a job invalidates late results but does not interrupt Claude's loop.
+- Cancelling a job invalidates late results but does not interrupt Claude's loop. A job scoped to a table cell can be answered with a change to the whole table. After a server restart, a reconnecting session with the same name inherits the previous session's open jobs.
 - Markdown import may normalise source. Obsidian syntax, frontmatter and raw HTML are not certified to round-trip.
 - Anyone with the notebook key can read and write the notebook and connect an agent to it. Rotate it from the lab vault if it leaks.
