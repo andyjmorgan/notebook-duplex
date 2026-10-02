@@ -11,11 +11,14 @@ import Image from '@tiptap/extension-image'
 import { NotebookCodeBlock } from './editor/mermaid'
 import { ImageMarkdown } from './editor/imageMarkdown'
 import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model'
-import { api, apiKey as keyStore, Unauthorized } from './api'
+import { api, apiBlob, apiKey as keyStore, Unauthorized } from './api'
 import * as apiModule from './api'
 import type { Proposal, State } from './types'
 import { NotebookAnnotations, annotationsKey, hostFor, releaseHosts } from './editor/annotations'
 import { TkDirectives, directivesPluginKey, findDirectives, directiveKey, type DirectiveStatus } from './editor/directives'
+import { ReadAloudHighlight, readAloudKey } from './editor/readAloud'
+import { buildScript, utteranceAt, type Utterance } from './reading/script'
+import { ReadAloudPlayer, type PlayerSnapshot } from './reading/player'
 import { OffscreenMarkers, type Marker } from './components/OffscreenMarkers'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { SuggestionCard } from './components/SuggestionCard'
@@ -23,7 +26,7 @@ import { CommandBar } from './components/CommandBar'
 import { SlashMenu, slashChoices } from './components/SlashMenu'
 import { Toolbar, runAction } from './components/Toolbar'
 import { Outline, type Heading } from './components/Outline'
-import { Rail } from './components/Rail'
+import { Rail, type HeldRequest } from './components/Rail'
 import { KeyGate } from './components/KeyGate'
 
 const initialMarkdown = `Write with your Claude session beside you.
@@ -49,6 +52,8 @@ Use the local test suggestion to try the review flow without connecting Claude. 
 `
 const idTypes = ['paragraph', 'heading', 'table', 'tableRow', 'tableCell', 'tableHeader', 'listItem', 'blockquote', 'codeBlock', 'bulletList', 'orderedList', 'image']
 const PROOFREAD_TABLE_INSTRUCTION = 'Proofread this table for spelling, grammar, consistency and clarity. Its cells are the blocks in scope, in reading order. Return replace proposals only for cells where a change helps; otherwise report completion. Preserve the writer’s meaning.'
+const AGENT_BUSY = 'Claude is working on this page. Read aloud is available when it finishes.'
+const activeJob = (j: { status: string }) => ['queued', 'running', 'needs_permission'].includes(j.status)
 const PROOFREAD_INSTRUCTION = 'Proofread the selected paragraph for spelling, grammar, and clarity. Return a replace proposal only if a change helps; otherwise report completion. Preserve the writer’s meaning and voice.'
 
 export function App() {
@@ -70,7 +75,10 @@ export function App() {
   const [proofread, setProofread] = useState(false)
   const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; selection?: string; scopeLabel?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
   useEffect(() => { const onAsk = (e: Event) => { const d = (e as CustomEvent).detail; live.current.openCommand('', undefined, { blockId: d.blockId, label: d.label }) }; window.addEventListener('notebook:ask', onAsk); return () => window.removeEventListener('notebook:ask', onAsk) }, [])
-  const [menu, setMenu] = useState<{ x: number; y: number; selection: string; blockId?: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; selection: string; blockId?: string; pos?: number } | null>(null)
+  const [reading, setReading] = useState<PlayerSnapshot>({ status: 'idle', index: 0, total: 0, speed: 1 })
+  const [held, setHeld] = useState<HeldRequest[]>([])
+  const readingRef = useRef(false), heldRef = useRef<HeldRequest[]>([])
   const [markers, setMarkers] = useState<Marker[]>([])
   const [tick, setTick] = useState(0)
   const [slashIndex, setSlashIndex] = useState(0)
@@ -88,12 +96,20 @@ export function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   stateRef.current = state
   // Editor key handlers are created once; they reach the latest render through this ref.
-  const live = useRef({ openCommand: (_initial?: string, _selection?: string, _scope?: { blockId: string; label: string }) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {}, editor: (): Editor | null => null })
+  const live = useRef({ openCommand: (_initial?: string, _selection?: string, _scope?: { blockId: string; label: string }) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {}, docChanged: () => {}, flushHeld: async () => {}, showUtterance: (_u: Utterance | null) => {}, editor: (): Editor | null => null })
 
   const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
+  // One player for the page. Audio is fetched at speed 1 and paced with playbackRate, so the clip cache survives speed changes.
+  const [player] = useState(() => new ReadAloudPlayer({
+    tts: text => apiBlob('/api/tts', { text, speed: 1 }),
+    describe: d => api<{ text: string }>('/api/describe', d).then(r => r.text),
+    onChange: s => { const was = readingRef.current; readingRef.current = s.status !== 'idle'; setReading(s); if (was && !readingRef.current) void live.current.flushHeld() },
+    onUtterance: u => live.current.showUtterance(u),
+    onError: notify,
+  }))
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ codeBlock: false }), NotebookCodeBlock, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true, inline: true }), ImageMarkdown, NotebookAnnotations, TkDirectives],
+    extensions: [StarterKit.configure({ codeBlock: false }), NotebookCodeBlock, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true, inline: true }), ImageMarkdown, NotebookAnnotations, TkDirectives, ReadAloudHighlight],
     content: initialMarkdown, contentType: 'markdown', editable: false,
     editorProps: {
       attributes: { 'aria-label': 'Document', spellcheck: 'true' },
@@ -137,7 +153,7 @@ export function App() {
         return false
       },
     },
-    onUpdate() { if (!ready.current) return; dirty.current = true; lastEdit.current = Date.now(); queueSync(); live.current.onUpdate() },
+    onUpdate({ transaction }) { if (!ready.current) return; dirty.current = true; lastEdit.current = Date.now(); queueSync(); if (transaction.docChanged) live.current.docChanged(); live.current.onUpdate() },
   })
 
   const view = useEditorState({
@@ -224,7 +240,7 @@ export function App() {
     if (!editor) return
     const fresh = await api<State>('/api/state')
     revision.current = fresh.document.revision
-    if (fresh.document.json) editor.commands.setContent(fresh.document.json, { emitUpdate: false })
+    if (fresh.document.json) { player.clear(); editor.commands.setContent(fresh.document.json, { emitUpdate: false }) }
     for (const d of findDirectives(editor.state.doc)) if (d.complete) firedDirectives.current.add(directiveKey(d))
     dirty.current = false; setSaveState('Saved')
     setState(fresh)
@@ -298,7 +314,7 @@ export function App() {
     if (!proofread || !editor) return
     const timer = setInterval(async () => {
       const s = stateRef.current
-      if (!ready.current || busy || dirty.current || syncing.current || Date.now() - lastEdit.current < 2500 || !sessionId || !s) return
+      if (!ready.current || busy || readingRef.current || dirty.current || syncing.current || Date.now() - lastEdit.current < 2500 || !sessionId || !s) return
       if (s.jobs.some(j => j.kind === 'proofread' && ['queued', 'running'].includes(j.status))) return
       const units: { key: string; text: string; blockIds: string[]; table: boolean }[] = []
       editor.state.doc.forEach(top => {
@@ -335,10 +351,48 @@ export function App() {
   }
   function closeCommand() { setCommand(c => ({ ...c, open: false })); editor?.commands.focus() }
   async function submitCommand(instruction: string, whole: boolean) {
+    const blockIds = whole || !command.scopeId ? [] : [command.scopeId]
+    const context = command.selection ? { selection: command.selection } : undefined
+    // While the document is being read aloud, asks are held and sent in order once reading stops.
+    if (readingRef.current) {
+      heldRef.current = [...heldRef.current, { id: crypto.randomUUID(), instruction, blockIds, sessionId, context }]
+      setHeld(heldRef.current); closeCommand(); notify('Held until you stop reading.'); return
+    }
     await flush()
-    await api('/api/jobs', { instruction, blockIds: whole || !command.scopeId ? [] : [command.scopeId], sessionId, context: command.selection ? { selection: command.selection } : undefined })
+    await api('/api/jobs', { instruction, blockIds, sessionId, context })
     closeCommand()
     void refresh()
+  }
+  async function flushHeld() {
+    const queue = heldRef.current
+    if (!queue.length) return
+    heldRef.current = []; setHeld([])
+    try { await flush() } catch {}
+    let sent = 0
+    for (const h of queue) { try { await api('/api/jobs', { instruction: h.instruction, blockIds: h.blockIds, sessionId: h.sessionId, context: h.context }); sent++ } catch (e) { notify((e as Error).message) } }
+    if (sent) notify(`Sent ${sent} held ${sent === 1 ? 'request' : 'requests'} to Claude.`)
+    void refresh()
+  }
+
+  // Read aloud
+  const agentActive = Boolean(state?.activity.length) || (state?.jobs ?? []).some(activeJob)
+  function startReading(fromPos?: number) {
+    if (!editor) return
+    if (agentActive) { notify(AGENT_BUSY); return }
+    const script = buildScript(editor.state.doc)
+    if (!script.length) { notify('Nothing to read yet.'); return }
+    player.start(script, fromPos === undefined ? 0 : utteranceAt(script, fromPos))
+  }
+  function showUtterance(u: Utterance | null) {
+    if (!editor || editor.isDestroyed) return
+    editor.view.dispatch(editor.state.tr.setMeta(readAloudKey, u ? { from: u.from, to: u.to, inline: u.inline } : null).setMeta('addToHistory', false))
+    if (!u) return
+    requestAnimationFrame(() => {
+      const el = editor.view.dom.querySelector('.reading-now, .reading-now-block')
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      if (r.top < 150 || r.bottom > window.innerHeight - 110) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
   }
   function runDirective() {
     const id = currentBlockId(); let text = ''
@@ -363,6 +417,7 @@ export function App() {
 
   const busyRef = useRef(false)
   async function withBusy(fn: () => Promise<void>, { quiet = false } = {}) {
+    if (readingRef.current) { const e = new Error('Stop reading before reviewing suggestions.'); notify(e.message); throw e }
     if (busyRef.current && !quiet) return
     busyRef.current = true; setBusy(true)
     try { await fn() } catch (e) { notify((e as Error).message); throw e } finally { busyRef.current = false; setBusy(false); void refresh() }
@@ -454,6 +509,7 @@ export function App() {
   async function acceptAll() {
     const pending = (stateRef.current?.proposals ?? []).filter(p => p.status === 'pending' && !p.stale && p.type !== 'comment')
     if (!editor || !pending.length) return
+    if (readingRef.current) { notify('Stop reading before reviewing suggestions.'); return }
     const order = new Map<string, number>()
     editor.state.doc.descendants((node, pos) => { if (node.attrs?.id) order.set(node.attrs.id, pos) })
     const at = (p: Proposal) => order.get(p.type === 'insert' || p.type === 'move' ? p.anchorBlockId ?? '' : p.type === 'replace_text' ? p.edits?.[0]?.blockId ?? '' : p.blockId ?? '') ?? Number.MAX_SAFE_INTEGER
@@ -504,7 +560,7 @@ export function App() {
   }
 
   function onEditorUpdate() {
-    if (!editor || !sessionId) return
+    if (!editor || !sessionId || readingRef.current) return
     const fresh = findDirectives(editor.state.doc).filter(d => d.complete && d.text && !firedDirectives.current.has(directiveKey(d)))
     for (const d of fresh) {
       firedDirectives.current.add(directiveKey(d))
@@ -522,16 +578,21 @@ export function App() {
     }
   }
   function onContextMenu(event: React.MouseEvent) {
-    if (!editor || mode !== 'editing' || !(event.target as HTMLElement).closest('.tiptap')) return
+    if (!editor || !(event.target as HTMLElement).closest('.tiptap')) return
     if ((event.target as HTMLElement).closest('.suggestion-host')) return
     event.preventDefault()
     const { from, to } = editor.state.selection
-    setMenu({ x: event.clientX, y: event.clientY, selection: from !== to ? editor.state.doc.textBetween(from, to, ' ').trim() : '', blockId: currentBlockId() })
+    const hit = editor.view.posAtCoords({ left: event.clientX, top: event.clientY })
+    setMenu({ x: event.clientX, y: event.clientY, selection: from !== to ? editor.state.doc.textBetween(from, to, ' ').trim() : '', blockId: currentBlockId(), pos: hit ? (hit.inside >= 0 ? hit.inside : hit.pos) : undefined })
   }
   const menuItems: MenuItem[] = menu ? (() => {
     const connected = (state?.sessions ?? []).some(s => s.connected)
     const hasSelection = Boolean(menu.selection)
     const copy = () => { try { document.execCommand('copy') } catch {} }
+    const readItem: MenuItem = readingRef.current
+      ? { icon: '■', iconClass: 'reading', label: 'Stop reading', onSelect: () => player.stop() }
+      : { icon: '▶', iconClass: 'reading', label: 'Read from here', disabled: agentActive, title: agentActive ? AGENT_BUSY : undefined, onSelect: () => startReading(menu.pos) }
+    if (mode !== 'editing') return [readItem, { separator: true, label: '' }, { icon: '', label: 'Copy', hint: '⌘C', disabled: !hasSelection, onSelect: copy }]
     const cut = () => { try { document.execCommand('cut') } catch {} }
     const paste = async () => { try { const text = await navigator.clipboard.readText(); if (text) editor!.chain().focus().insertContent(text).run() } catch { notify('Paste with ⌘V; the browser blocked clipboard access.') } }
     const proofread = async () => {
@@ -547,8 +608,10 @@ export function App() {
       } catch (e) { notify((e as Error).message) }
     }
     return [
-      { icon: '✦', label: hasSelection ? 'Ask agent about this' : 'Ask agent…', hint: '⌘K', disabled: !connected, onSelect: () => openCommand('', menu.selection || undefined) },
-      { icon: '✓', label: 'Proofread this', disabled: !connected || !menu.blockId, onSelect: () => void proofread() },
+      readItem,
+      { separator: true, label: '' },
+      { icon: '✦', label: hasSelection ? 'Ask agent about this' : 'Ask agent…', hint: '⌘K', disabled: !connected, title: readingRef.current ? 'Held until you stop reading' : undefined, onSelect: () => openCommand('', menu.selection || undefined) },
+      { icon: '✓', label: 'Proofread this', disabled: !connected || !menu.blockId || readingRef.current, title: readingRef.current ? 'Paused while reading aloud' : undefined, onSelect: () => void proofread() },
       { separator: true, label: '' },
       { icon: 'B', label: 'Bold', hint: '⌘B', onSelect: () => runAction(editor!, 'bold') },
       { icon: 'I', label: 'Italic', hint: '⌘I', onSelect: () => runAction(editor!, 'italic') },
@@ -561,7 +624,7 @@ export function App() {
     ]
   })() : []
 
-  live.current = { openCommand, executeSlash, accept, currentBlockId, currentBlockChain, onUpdate: onEditorUpdate, editor: () => editor }
+  live.current = { openCommand, executeSlash, accept, currentBlockId, currentBlockChain, onUpdate: onEditorUpdate, docChanged: () => player.clear(), flushHeld, showUtterance, editor: () => editor }
 
   if (authed === false) return <KeyGate onSubmit={submitKey} error={gateError} />
   if (!editor) return null
@@ -587,7 +650,7 @@ export function App() {
         </div>
       </header>
       <div className="workspace">
-        <Outline headings={view?.headings ?? []} onJump={jump} words={view?.words ?? 0} />
+        <Outline headings={view?.headings ?? []} onJump={jump} words={view?.words ?? 0} player={{ snapshot: reading, disabled: agentActive, disabledReason: AGENT_BUSY, onPlay: () => reading.status === 'paused' ? player.play() : startReading(), onPause: () => player.pause(), onStop: () => player.stop(), onSpeed: s => player.setSpeed(s) }} />
         <main className="writing">
           <div className="document-heading"><input ref={titleRef} aria-label="Document title" defaultValue="Working notes" readOnly={mode !== 'editing'} onInput={() => { dirty.current = true; queueSync() }} /></div>
           {mode === 'editing' && <Toolbar editor={editor} flags={view?.flags ?? { bold: false, italic: false, h1: false, h2: false, h3: false, inTable: false }} disabled={busy} />}
@@ -598,9 +661,9 @@ export function App() {
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>
-        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} busy={busy} onNotify={notify} />
+        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} busy={busy} onNotify={notify} reading={reading.status !== 'idle'} held={held} onStopReading={() => player.stop()} />
       </div>
-      {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
+      {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy || reading.status !== 'idle'} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />
       {slashOpen && slashPosition && <SlashMenu query={view!.slashText} index={slashIndex} position={slashPosition} onPick={executeSlash} />}
       {(updateReady || mermaidFailed) && <div className="update-banner" role="status">Notebook Duplex was updated while this tab was open{mermaidFailed ? ', so diagrams cannot load' : ''}. <button className="primary small" onClick={async () => { try { await flush() } catch {} location.reload() }}>Reload</button></div>}

@@ -5,6 +5,7 @@
   --ui-brand: #632ca6; --ui-brand-soft: #f2ecfc; --ui-brand-contrast: #451481;
   --ui-primary: #006bc2; --ui-primary-contrast: #0953bf; --ui-primary-soft: #eaf6fc;
   --ui-ai: #5e6dd6; --ui-ai-soft: #f0f2ff;
+  --ui-reading: #b4621a; --ui-reading-soft: #fff4e6; --ui-reading-mark: rgba(242,158,45,.34);
   --ui-success: #2a7e41; --ui-success-soft: #ecf9ef; --ui-danger: #bc2b3c; --ui-danger-soft: #fdebed; --ui-warning: #c15800; --ui-warning-soft: #fff6e3;
   --shadow-soft: 0 1px 2px rgba(28,43,52,.06), 0 6px 20px rgba(28,43,52,.06);
   --ease: cubic-bezier(.2,.8,.2,1);
@@ -39,7 +40,7 @@ button kbd { margin-left: 8px; opacity: .8 } .primary kbd { background: rgba(255
 .outline-title { font-size: 11px; font-weight: 600; padding: 0 12px 10px; color: var(--ui-text-tertiary); letter-spacing: .4px; text-transform: uppercase }
 #toc button { display: block; width: 100%; text-align: left; font-size: 12px; color: var(--ui-text-secondary); line-height: 17px; margin: 1px 0; padding-top: 6px; padding-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 #toc button:hover { color: var(--ui-primary); background: var(--ui-primary-soft) } #toc p { font-size: 11px; padding: 0 12px; color: var(--ui-text-tertiary) }
-.outline-note { margin-top: auto; padding: 0 12px; font-size: 10px; line-height: 1.8; color: var(--ui-text-tertiary) }
+.outline-foot { margin-top: auto; padding: 0 6px 0 12px } .outline-note { font-size: 10px; line-height: 1.8; color: var(--ui-text-tertiary); margin-bottom: 6px }
 .writing { padding: 30px 48px 20px; min-width: 0; max-width: 1040px; width: 100%; margin: 0 auto }
 .document-heading input { border: 0; background: none; font-size: 30px; line-height: 40px; font-weight: 600; color: var(--ui-text); outline: none; width: 100%; padding: 0; letter-spacing: -.5px; margin-bottom: 14px }
 
@@ -244,3 +245,21 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 .mermaid-tools { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 4px } .mermaid-tools .mermaid-expand { position: static }
 .mermaid-ask .claude-mark { display: inline-block; width: 13px; height: 13px; background: var(--claude-mark) center/contain no-repeat }
 .code-diff { margin: 0; font: 12.5px/1.6 "Roboto Mono", monospace; background: #fff; border: 1px solid var(--ui-border); border-radius: 6px; padding: 6px 0; overflow: auto; white-space: pre } .code-line { padding: 0 10px } .code-line.del { background: var(--ui-danger-soft); color: var(--ui-danger) } .code-line.ins { background: var(--ui-success-soft); color: var(--ui-success) } .code-line .gutter { display: inline-block; width: 14px; color: var(--ui-text-tertiary) }
+
+/* Read aloud */
+.tiptap .reading-now { background: var(--ui-reading-mark); box-shadow: 0 0 0 2px var(--ui-reading-mark); border-radius: 3px; box-decoration-break: clone; -webkit-box-decoration-break: clone; transition: background .2s }
+.tiptap .reading-now-block { box-shadow: 0 0 0 4px var(--ui-reading-mark); border-radius: 8px; background: var(--ui-reading-soft) }
+.tiptap .tableWrapper.reading-now-block { margin-left: -10px; margin-right: -10px; padding: 6px 10px 2px }
+.tiptap tr.reading-now-block { box-shadow: none; background: none } .tiptap tr.reading-now-block td, .tiptap tr.reading-now-block th { background: var(--ui-reading-soft); box-shadow: inset 0 0 0 1px var(--ui-reading-mark) }
+.tiptap img.reading-now-block { box-shadow: none; outline: 3px solid var(--ui-reading-mark); outline-offset: 2px; background: none }
+.player { border-top: 1px solid var(--ui-border); padding-top: 10px }
+.player-row { display: flex; align-items: center; gap: 4px }
+.player button { width: 26px; height: 26px; min-height: 0; padding: 0; display: grid; place-items: center; border-radius: 6px; color: var(--ui-text-secondary); flex-shrink: 0 } .player button svg { width: 11px; height: 11px; fill: currentColor }
+.player-main { background: var(--ui-reading-soft); color: var(--ui-reading) } .player-main:hover:not(:disabled) { background: #ffe6c4; color: var(--ui-reading) }
+.player.playing .player-main, .player.loading .player-main { background: var(--ui-reading); color: #fff } .player.playing .player-main:hover, .player.loading .player-main:hover { background: #9a5213; color: #fff }
+.player-position { font: 10px "Roboto Mono", monospace; color: var(--ui-text-secondary); flex: 1; min-width: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -.2px } .player.idle .player-position { font-family: "Noto Sans", sans-serif; color: var(--ui-text-tertiary) } .player.loading .player-position { animation: pulse 1.2s infinite }
+.player-speed { width: auto; font-size: 10px; padding: 2px 4px; border-color: transparent; background: transparent; color: var(--ui-text-tertiary); border-radius: 5px; appearance: none; -webkit-appearance: none; text-align: center; flex-shrink: 0 } .player-speed:hover, .player-speed:focus { border-color: var(--ui-border); background: #fff; color: var(--ui-text) }
+.player-progress { height: 3px; background: #f1e9df; border-radius: 3px; overflow: hidden; margin-top: 8px } .player-progress span { display: block; height: 100%; background: var(--ui-reading); border-radius: 3px; transition: width .3s var(--ease) } .player.idle .player-progress { opacity: .6 }
+.rail-section.held { background: var(--ui-reading-soft); margin: 0 -8px 18px; padding: 10px 8px 12px; border-radius: 8px } .rail-section.held .section-label { border-bottom-color: #f1dcc0; color: var(--ui-reading) } .rail-section.held .section-label span:last-child:not(:first-child) { background: #fbe3c6; color: var(--ui-reading) }
+.held-item .job-status { background: #fbe3c6; color: var(--ui-reading) } .stop-reading { color: var(--ui-reading); font-weight: 600; margin-top: 6px; padding-left: 0 }
+.menu-item .menu-icon.reading { color: var(--ui-reading) }

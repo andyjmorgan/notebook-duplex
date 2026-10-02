@@ -13,3 +13,9 @@ export async function api<T = any>(path: string, data?: unknown, key = apiKey.ge
   if (!response.ok) throw new Error(result.error ?? 'Request failed')
   return result as T
 }
+export async function apiBlob(path: string, data: unknown, key = apiKey.get()): Promise<Blob> {
+  const response = await fetch(path, { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+  if (response.status === 401) throw new Unauthorized()
+  if (!response.ok) { const result = await response.json().catch(() => ({})); throw new Error(result.error ?? 'Request failed') }
+  return response.blob()
+}

@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { Store } from './store.mjs'
 import { createMcpServer, channelNotification } from './mcp.mjs'
+import { createHash } from 'node:crypto'
+import { describeDiagramFallback, describeCodeFallback, diagramUtterance, codeUtterance, spokenText } from '../shared/narration.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const dataDir = resolve(process.env.DATA_DIR ?? join(root, '.runtime'))
@@ -16,6 +18,9 @@ const host = process.env.HOST ?? '127.0.0.1'
 const apiKey = process.env.NOTEBOOK_API_KEY || (() => { const k = randomBytes(24).toString('base64url'); console.log('NOTEBOOK_API_KEY not set. Using a generated key for this run:\n  ' + k); return k })()
 const keyBuffer = Buffer.from(apiKey)
 const sessionGrace = Number(process.env.SESSION_GRACE_MS ?? 20000)
+// Read-aloud: Kokoro TTS (in-cluster service first, GPU host as fallback) and an LLM for describing diagrams and code.
+const kokoro = { urls: [process.env.KOKORO_URL ?? 'http://kokoro-tts.kokoro-tts.svc.cluster.local:8000', process.env.KOKORO_FALLBACK_URL ?? 'http://192.168.69.28:30882'].filter(Boolean).map(u => u.replace(/\/$/, '')), voice: process.env.KOKORO_VOICE || 'af_heart', active: 0 }
+const describeLlm = { url: (process.env.DESCRIBE_LLM_URL ?? 'http://192.168.69.28:11434').replace(/\/$/, ''), model: process.env.DESCRIBE_LLM_MODEL || 'gemma4:26b', timeout: Number(process.env.DESCRIBE_LLM_TIMEOUT_MS ?? 20000) }
 
 await mkdir(dataDir, { recursive: true, mode: 0o700 })
 let saved
@@ -165,6 +170,68 @@ async function handleApi(req, res, path) {
     } catch (e) { json(res, 400, { error: e.message }) }
   })
 }
+const unreachable = e => e.name === 'TimeoutError' || e.name === 'AbortError' || /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ETIMEDOUT/.test([e.cause?.code, e.cause?.message, e.message].join(' '))
+async function handleTts(req, res) {
+  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' })
+  let data
+  try { data = JSON.parse(await readBody(req)) } catch { return json(res, 400, { error: 'Invalid JSON' }) }
+  const text = String(data.text ?? '').trim().slice(0, 2000)
+  if (!text) return json(res, 400, { error: 'Nothing to speak' })
+  const speed = Math.min(2, Math.max(0.5, Number(data.speed) || 1))
+  const body = JSON.stringify({ input: text, voice: kokoro.voice, speed, response_format: 'wav' })
+  // Stick with the base that last answered; move on to the next only when a request cannot reach it.
+  for (let attempt = 0; attempt < kokoro.urls.length; attempt++) {
+    const base = kokoro.urls[(kokoro.active + attempt) % kokoro.urls.length]
+    try {
+      const upstream = await fetch(base + '/v1/audio/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(45000) })
+      if (!upstream.ok) { const detail = await upstream.text().catch(() => ''); return json(res, 502, { error: `Text to speech failed (${upstream.status}): ${detail.slice(0, 200)}` }) }
+      kokoro.active = (kokoro.active + attempt) % kokoro.urls.length
+      const audio = Buffer.from(await upstream.arrayBuffer())
+      res.writeHead(200, { 'Content-Type': upstream.headers.get('content-type') ?? 'audio/wav', 'Content-Length': audio.length, 'Cache-Control': 'no-store', 'X-Build': buildId, 'X-TTS-Voice': kokoro.voice })
+      return res.end(audio)
+    } catch (e) {
+      if (!unreachable(e) || attempt === kokoro.urls.length - 1) return json(res, 502, { error: 'Text to speech is unreachable: ' + (e.cause?.message ?? e.message) })
+    }
+  }
+}
+
+const descriptions = new Map()
+const DESCRIBE_SYSTEM = 'You narrate documents aloud for a listener who cannot see the screen. Reply with plain spoken prose only: no markdown, no bullet points, no code, no preamble.'
+async function describeWithLlm(kind, source, language) {
+  const prompt = kind === 'diagram'
+    ? `This Mermaid diagram appears in a document. Explain what the chart is showing in two or three short spoken sentences. Begin with a lowercase noun phrase that completes the sentence "A chart or diagram showing …" (for example: "a three-step flow from writing to review").\n\n\`\`\`mermaid\n${source}\n\`\`\``
+    : `This ${language ? language + ' ' : ''}code block appears in a document. Summarise what the code does in one or two short spoken sentences for someone listening, without reading the code itself.\n\n\`\`\`${language ?? ''}\n${source}\n\`\`\``
+  const upstream = await fetch(describeLlm.url + '/v1/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(describeLlm.timeout),
+    body: JSON.stringify({ model: describeLlm.model, stream: false, temperature: 0.2, max_tokens: 200, think: false, reasoning_effort: 'none', messages: [{ role: 'system', content: DESCRIBE_SYSTEM }, { role: 'user', content: prompt }] }),
+  })
+  if (!upstream.ok) throw new Error(`describe model returned ${upstream.status}`)
+  const result = await upstream.json()
+  return spokenText(String(result.choices?.[0]?.message?.content ?? ''))
+}
+async function handleDescribe(req, res) {
+  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' })
+  let data
+  try { data = JSON.parse(await readBody(req)) } catch { return json(res, 400, { error: 'Invalid JSON' }) }
+  const kind = data.kind === 'diagram' ? 'diagram' : 'code'
+  const source = String(data.source ?? '').slice(0, 12000)
+  const language = kind === 'diagram' ? 'mermaid' : String(data.language ?? '').trim().toLowerCase() || null
+  if (!source.trim()) return json(res, 200, { text: kind === 'diagram' ? 'An empty diagram.' : codeUtterance(language, ''), source: 'fallback' })
+  const key = createHash('sha256').update(`${kind}\n${language}\n${source}`).digest('hex')
+  const cached = descriptions.get(key)
+  if (cached) return json(res, 200, { text: cached, source: 'llm', cached: true })
+  try {
+    const spoken = await describeWithLlm(kind, source, language)
+    if (!spoken) throw new Error('empty description')
+    const text = kind === 'diagram' ? diagramUtterance(spoken) : codeUtterance(language, spoken)
+    descriptions.set(key, text)
+    if (descriptions.size > 500) descriptions.delete(descriptions.keys().next().value)
+    return json(res, 200, { text, source: 'llm', cached: false })
+  } catch (e) {
+    console.error('describe failed: ' + (e.cause?.message ?? e.message))
+    return json(res, 200, { text: kind === 'diagram' ? diagramUtterance(describeDiagramFallback(source)) : describeCodeFallback(language, source), source: 'fallback' })
+  }
+}
 function publicUrl(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '')
   const proto = req.headers['x-forwarded-proto'] ?? 'http'
@@ -191,6 +258,8 @@ const server = createServer(async (req, res) => {
     if (path.startsWith('/api/') || path === '/mcp') {
       if (!authorized(req)) { res.setHeader('WWW-Authenticate', 'Bearer realm="notebook-duplex"'); return json(res, 401, { error: 'Unauthorized' }) }
       if (path === '/mcp') return await handleMcp(req, res)
+      if (path === '/api/tts') return await handleTts(req, res)
+      if (path === '/api/describe') return await handleDescribe(req, res)
       return await handleApi(req, res, path)
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'Method not allowed' })

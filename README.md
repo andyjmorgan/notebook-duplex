@@ -16,6 +16,7 @@ Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a sin
 - **Right-click menu.** Ask the agent about the highlighted text (the selection travels with the request), proofread the paragraph or table under the caret, format, insert a table, cut, copy and paste.
 - **Nothing hides off-screen.** Floating pills at the top and bottom of the page count suggestions and working agents outside the viewport and scroll you to the nearest one.
 - **Keyboard review.** With the caret in a paragraph that has a suggestion, `⌘↵` accepts it. `⌘Z` undoes any accepted change.
+- **Read aloud.** The player under the word count (bottom left) reads the document with Kokoro TTS and highlights each utterance in amber as it plays: sentences inline; images, diagrams, tables and table rows as blocks. Headings are their own utterance, images read as "An image of {alt}", a table is announced ("A table with 2 columns and 2 rows.") and then read row by row with the column titles ("Idea: Write freely. Next step: …"), and a Mermaid fence is read as "A chart or diagram showing …" with a two-sentence explanation from the lab LLM (code blocks get a short summary). `[tk: …]` notes and suggestion cards are skipped. Controls: Play/Pause, Stop, speed (0.75×, 1×, 1.3×, 1.5×, applied as `playbackRate` so switching is instant), position and a progress bar. Right-click gives **Read from here** and **Stop reading**; it works in Reading mode too. Audio is requested a few utterances ahead and cached for the session; any edit empties the recording. While Claude is working on the page the player is disabled, and while you listen the agent is paused: asks you make are held in the rail and sent in order when you stop; proofreading, `[tk]` firing and Accept/Reject wait.
 - **Stale protection.** If you rewrite a paragraph after a suggestion was written, the suggestion is marked as changed and cannot be applied. Writing anywhere else leaves it alive.
 - Rich text formatting, GFM tables with row and column controls, images, Mermaid diagrams (a ```mermaid fence shows as a diagram with a Source tab and an expand button; the source opens when the caret enters the block). Tune a diagram with Mermaid front matter, or the theme, look and layout pickers in its header, which write that front matter for you:
 
@@ -92,15 +93,17 @@ Without a key, the server prints a generated one at startup. For a production-li
 
 Environment: `NOTEBOOK_API_KEY`, `PORT` (8787), `HOST` (127.0.0.1), `DATA_DIR` (`.runtime`), `PUBLIC_URL` (used for the MCP URL shown in the UI), `SESSION_GRACE_MS` (how long a session survives without its SSE stream, 20000).
 
+Read-aloud (the browser cannot reach the lab LAN, so the server proxies both under the notebook key): `KOKORO_URL` (`http://kokoro-tts.kokoro-tts.svc.cluster.local:8000`, OpenAI-style `POST /v1/audio/speech` returning WAV), `KOKORO_FALLBACK_URL` (`http://192.168.69.28:30882`, the GPU instance on the Spark, tried when the first is unreachable; set empty to disable), `KOKORO_VOICE` (`af_heart`), `DESCRIBE_LLM_URL` (`http://192.168.69.28:11434`, OpenAI-compatible `/v1/chat/completions`, reasoning off), `DESCRIBE_LLM_MODEL` (`gemma4:26b`), `DESCRIBE_LLM_TIMEOUT_MS` (20000). Descriptions are cached in memory by content hash; if the model is unreachable the server falls back to a deterministic description ("a flowchart with 4 nodes: A, B, C, D"). Endpoints: `POST /api/tts {text, speed}` → `audio/wav`, `POST /api/describe {kind, source, language}` → `{text}`.
+
 ## Verification
 
 ```sh
-npm test          # store, diff, and server tests, including a real MCP client over Streamable HTTP
+npm test          # store, diff, narration, read-aloud proxy and server tests, including a real MCP client over Streamable HTTP
 npm run build     # type-check and web build
 npm run test:e2e  # Playwright: browser + MCP agent end to end (needs: npx playwright install chromium)
 ```
 
-The end-to-end test covers the key gate, inline replace and insert proposals, editing before accept, stale detection, a remote MCP session receiving channel notifications, margin status rendering, reconsider round-trips, keyboard accept, undo, slash menu, and Reading mode.
+The end-to-end tests cover the key gate, inline replace and insert proposals, editing before accept, stale detection, a remote MCP session receiving channel notifications, margin status rendering, reconsider round-trips, keyboard accept, undo, slash menu, Reading mode, and read-aloud (with `/api/tts` and `/api/describe` intercepted in the browser): highlight order across sentences, tables, images and diagrams, pause and resume, Read from here, held asks, the Claude-active lock, and edits emptying the recording.
 
 ## Limits
 

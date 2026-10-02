@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { Activity, Job, Proposal, Session } from '../types'
 
+export type HeldRequest = { id: string; instruction: string; blockIds: string[]; sessionId: string; context?: Record<string, unknown> }
+
 type Props = {
   sessions: Session[]; sessionId: string; onSession: (id: string) => void
   jobs: Job[]; activity: Activity[]; proposals: Proposal[]
@@ -8,12 +10,13 @@ type Props = {
   proofread: boolean; onProofread: (on: boolean) => void
   onAsk: () => void; onDirective: () => void; onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; busy: boolean
   onNotify: (message: string) => void
+  reading: boolean; held: HeldRequest[]; onStopReading: () => void
 }
 const active = (j: Job) => ['queued', 'running', 'needs_permission'].includes(j.status)
 const stateVerb: Record<string, string> = { reading: 'Reading', thinking: 'Thinking', writing: 'Writing', waiting: 'Waiting on you', done: 'Finishing' }
 const statusLabel: Record<string, string> = { queued: 'Queued', needs_permission: 'Needs permission in Claude\'s terminal', abandoned: 'Abandoned' }
 
-export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onAcceptAll, busy, onNotify }: Props) {
+export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onAcceptAll, busy, onNotify, reading, held, onStopReading }: Props) {
   const [showKey, setShowKey] = useState(false)
   const connected = sessions.filter(s => s.connected)
   const current = connected.find(s => s.id === sessionId)
@@ -43,8 +46,17 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
           <button className="primary" onClick={onAsk} disabled={!connected.length}>✦ Ask<kbd>⌘K</kbd></button>
           <button className="quiet" onClick={onDirective} disabled={!connected.length} title="Run the [tk: …] directive in the current paragraph">Run [tk]</button>
         </div>
-        <label className="proofreading"><input type="checkbox" checked={proofread} disabled={!connected.length} onChange={e => onProofread(e.target.checked)} /> Proofread settled paragraphs <span className="beta">EXPERIMENTAL</span></label>
+        <label className="proofreading" title={reading ? 'Paused while the document is being read aloud.' : undefined}><input type="checkbox" checked={proofread} disabled={!connected.length || reading} onChange={e => onProofread(e.target.checked)} /> Proofread settled paragraphs <span className="beta">EXPERIMENTAL</span></label>
       </section>
+
+      {(reading || held.length > 0) && (
+        <section className="rail-section held" aria-live="polite">
+          <div className="section-label"><span>Reading aloud</span>{held.length > 0 && <span>{held.length}</span>}</div>
+          <p className="rail-muted small">{held.length ? `${held.length} ${held.length === 1 ? 'request' : 'requests'} held until you stop reading.` : 'Claude waits while you listen. Asks you make now are held and sent when you stop.'}</p>
+          {held.map(h => <div key={h.id} className="recent held-item"><span className="job-status queued">held</span><span>{h.instruction.split('\n')[0]}</span></div>)}
+          {reading && <button className="quiet small stop-reading" onClick={onStopReading}>{held.length ? 'Stop reading and send' : 'Stop reading'}</button>}
+        </section>
+      )}
 
       <section className="rail-section">
         <div className="section-label"><span>Working</span><span>{live.length}</span></div>
@@ -70,7 +82,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
       </section>
 
       <section className="rail-section">
-        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone.">Accept all {acceptable.length}</button>}<span>{pending.length}</span></span></div>
+        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy || reading} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone.">Accept all {acceptable.length}</button>}<span>{pending.length}</span></span></div>
         {pending.length ? pending.map(p => (
           <button key={p.id} className="review-link" onClick={() => onLocate(p)}>
             <span className={`review-dot ${p.stale ? 'stale' : p.type}`} />
@@ -97,7 +109,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
         </div>
         <p>Claude proposes; only you accept. Tool permissions stay in Claude's terminal.</p>
       </details>
-      <button className="test-button" onClick={onDemo}>Try a local test suggestion</button>
+      <button className="test-button" onClick={onDemo} disabled={reading}>Try a local test suggestion</button>
       <p className="test-caption">No agent involved. Exercises accept, reject and reconsider on the current paragraph.</p>
     </aside>
   )
