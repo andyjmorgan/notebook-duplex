@@ -76,6 +76,7 @@ setInterval(() => {
   for (const session of sessions.values()) if (session.streams === 0 && Date.now() - Math.max(session.streamClosedAt ?? 0, session.connectedAt, session.lastSeen) > sessionGrace) dropSession(session.id)
   // Jobs orphaned by a restart or disconnect go to a live session of the same name (same repo), else wait for list_jobs.
   for (const job of store.orphans()) { const heir = [...sessions.values()].find(s => s.name === job.sessionName); if (heir) { store.reassign(job, heir.id); void save() } }
+  store.expireOrphans(Number(process.env.ORPHAN_MAX_AGE_MS ?? 600000))
   for (const job of store.state.jobs) if (job.status === 'queued' && sessions.has(job.sessionId) && Date.now() - (job.notifiedAt ?? 0) > 20000 && (job.notifyCount ?? 0) < 30) void notify(job)
 }, Math.min(5000, sessionGrace)).unref()
 

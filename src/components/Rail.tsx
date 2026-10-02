@@ -11,6 +11,7 @@ type Props = {
 }
 const active = (j: Job) => ['queued', 'running', 'needs_permission'].includes(j.status)
 const stateVerb: Record<string, string> = { reading: 'Reading', thinking: 'Thinking', writing: 'Writing', waiting: 'Waiting on you', done: 'Finishing' }
+const statusLabel: Record<string, string> = { queued: 'Queued', needs_permission: 'Needs permission in Claude\'s terminal', abandoned: 'Abandoned' }
 
 export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onNotify }: Props) {
   const [showKey, setShowKey] = useState(false)
@@ -48,10 +49,12 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
         <div className="section-label"><span>Working</span><span>{live.length}</span></div>
         {live.length ? live.map(j => {
           const a = activity.find(x => x.jobId === j.id)
+          const alive = sessions.some(s => s.id === j.sessionId && s.connected)
           return (
-            <article key={j.id} className={`job ${j.status}`}>
+            <article key={j.id} className={`job ${j.status} ${alive ? '' : 'orphaned'}`}>
               <div className="job-top">
-                <span className={`job-status ${j.status}`}>{a ? stateVerb[a.state] : j.status === 'queued' ? 'Queued' : j.status.replace('_', ' ')}</span>
+                <span className={`job-status ${j.status}`}>{j.status === 'needs_permission' ? statusLabel.needs_permission : a ? stateVerb[a.state] : statusLabel[j.status] ?? j.status.replace('_', ' ')}</span>
+                {!alive && <span className="proofread-tag" title="The session that took this job is no longer connected. A session with the same name will pick it up; otherwise it expires.">session offline</span>}
                 {j.kind === 'proofread' && <span className="proofread-tag">proofread</span>}
                 <button className="quiet cancel" onClick={() => void onCancel(j.id)}>Cancel</button>
               </div>
@@ -59,6 +62,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
               {a?.message && <small>{a.message}</small>}
               {a && <div className="progress" aria-hidden><span style={{ width: a.progress != null ? a.progress + '%' : undefined }} className={a.progress == null ? 'indeterminate' : ''} /></div>}
               {j.message && j.status === 'needs_permission' && <small>{j.message}</small>}
+              {j.status === 'needs_permission' && <small>Approve or deny the tool prompt in that Claude session, or cancel here.</small>}
             </article>
           )
         }) : <p className="rail-muted small">Nothing in flight. Keep writing.</p>}
@@ -78,7 +82,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
       {recent.length > 0 && (
         <section className="rail-section">
           <div className="section-label"><span>Recent</span></div>
-          {recent.map(j => <div key={j.id} className="recent"><span className={`job-status ${j.status}`}>{j.status.replace('_', ' ')}</span><span>{j.instruction.split('\n')[0]}</span></div>)}
+          {recent.map(j => <div key={j.id} className="recent" title={j.message ?? ''}><span className={`job-status ${j.status}`}>{j.status.replace('_', ' ')}</span><span>{j.instruction.split('\n')[0]}</span></div>)}
         </section>
       )}
 

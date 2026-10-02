@@ -231,6 +231,7 @@ export class Store {
     if (job.status === 'completed' && Date.now() - (job.finishedAt ?? 0) < 120000) { job.status = 'running'; delete job.finishedAt }
     if (job.status !== 'running') throw new Error(job.status === 'completed' ? 'This job closed more than two minutes ago; wait for the writer\'s next command.' : 'Claim this job before proposing changes.')
     let type = input.type ?? 'replace'
+    const base = { id: randomUUID(), type, jobId: job.id, sessionId, documentId: job.documentId, explanation: String(input.explanation ?? '').slice(0, 4000), status: 'pending', createdAt: Date.now() }
     if (type === 'delete' || (type === 'replace' && input.after === '')) {
       const block = job.snapshot.blocks.find(b => b.id === input.blockId)
       if (!block || !this.inScope(job, block)) throw new Error('Target outside job scope')
@@ -239,7 +240,6 @@ export class Store {
       this.state.proposals.push(proposal)
       return proposal
     }
-    const base = { id: randomUUID(), type, jobId: job.id, sessionId, documentId: job.documentId, explanation: String(input.explanation ?? '').slice(0, 4000), status: 'pending', createdAt: Date.now() }
     if (type === 'replace') {
       const block = job.snapshot.blocks.find(b => b.id === input.blockId)
       if (!block || !this.inScope(job, block)) throw new Error('Target outside job scope')
@@ -429,7 +429,16 @@ export class Store {
   }
 
   orphans() { return this.state.jobs.filter(j => ['queued', 'running', 'needs_permission'].includes(j.status) && !this.isLiveSession(j.sessionId)) }
-  reassign(job, sessionId) { job.sessionId = sessionId; if (this.state.activity[job.id]) this.state.activity[job.id].sessionId = sessionId; job.status = 'queued'; delete job.notifiedAt }
+  // An orphan nobody adopts is abandoned: its session is gone and no same-name session came back.
+  expireOrphans(maxAge = 10 * 60 * 1000) {
+    const now = Date.now()
+    for (const job of this.orphans()) {
+      const last = Math.max(job.createdAt ?? 0, job.acknowledgedAt ?? 0, this.state.activity[job.id]?.updatedAt ?? 0, job.orphanedAt ?? 0)
+      if (!job.orphanedAt) job.orphanedAt = now
+      if (now - last > maxAge) { job.message = job.status === 'needs_permission' ? 'Claude was waiting on a permission prompt when its session ended.' : 'The Claude session ended before this finished.'; this.finish(job, 'abandoned') }
+    }
+  }
+  reassign(job, sessionId) { job.sessionId = sessionId; if (this.state.activity[job.id]) this.state.activity[job.id].sessionId = sessionId; job.status = 'queued'; delete job.notifiedAt; delete job.orphanedAt }
 
   view() {
     return {

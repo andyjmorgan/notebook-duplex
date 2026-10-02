@@ -275,3 +275,15 @@ test('delete works on empty paragraphs and on tables without content validation'
   assert.equal(result.removed, true)
   assert.deepEqual(result.document.json.content.map(n => n.attrs.id), ['keep'])
 })
+test('orphaned jobs nobody adopts expire as abandoned, including needs_permission', () => {
+  const store = new Store(undefined, { isLiveSession: () => false })
+  store.sync({ json: doc(), expectedRevision: 0 })
+  const job = store.enqueue({ instruction: 'x', sessionId: 'dead', sessionName: 'repo', blockIds: ['a'] })
+  job.status = 'needs_permission'; job.createdAt = Date.now() - 11 * 60 * 1000
+  store.expireOrphans()
+  assert.equal(job.status, 'abandoned')
+  assert.match(job.message, /permission/)
+  const fresh = store.enqueue({ instruction: 'y', sessionId: 'dead', sessionName: 'repo', blockIds: [] })
+  store.expireOrphans()
+  assert.equal(fresh.status, 'queued', 'recent orphans wait for an heir')
+})
