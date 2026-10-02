@@ -7,7 +7,7 @@ import { TableKit } from '@tiptap/extension-table'
 import UniqueID from '@tiptap/extension-unique-id'
 import { Markdown } from '@tiptap/markdown'
 import Image from '@tiptap/extension-image'
-import { Fragment, type ResolvedPos } from '@tiptap/pm/model'
+import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model'
 import { api, apiKey as keyStore, Unauthorized } from './api'
 import type { Proposal, State } from './types'
 import { NotebookAnnotations, annotationsKey, hostFor, releaseHosts } from './editor/annotations'
@@ -134,30 +134,29 @@ export function App() {
   slashRef.current = { open: slashOpen, index: slashIndex }
   useEffect(() => { setSlashIndex(0) }, [view?.slashText])
 
-  function currentBlockId(): string | undefined {
+  // Prefer the live DOM selection: a keypress can arrive before ProseMirror has read a fresh click.
+  function caretPosition(): ResolvedPos | undefined {
     if (!editor) return
-    const textBlockAt = ($pos: ResolvedPos) => {
-      for (let depth = $pos.depth; depth >= 0; depth--) { const node = $pos.node(depth); if (['paragraph', 'heading'].includes(node.type.name) && node.attrs.id) return node.attrs.id as string }
-      // Between blocks (e.g. a click that landed on the editor root): prefer the block just before the position.
-      const near = $pos.nodeBefore ?? $pos.nodeAfter
-      if (near && ['paragraph', 'heading'].includes(near.type.name) && near.attrs.id) return near.attrs.id as string
-    }
-    // Prefer the live DOM selection: a keypress can arrive before ProseMirror has read a fresh click.
     try {
       const sel = window.getSelection()
-      if (sel?.anchorNode && editor.view.dom.contains(sel.anchorNode)) {
-        const pos = editor.view.posAtDOM(sel.anchorNode, sel.anchorOffset)
-        const id = textBlockAt(editor.state.doc.resolve(pos))
-        if (id) return id
-      }
+      if (sel?.anchorNode && editor.view.dom.contains(sel.anchorNode)) return editor.state.doc.resolve(editor.view.posAtDOM(sel.anchorNode, sel.anchorOffset))
     } catch {}
-    return textBlockAt(editor.state.selection.$from)
+    return editor.state.selection.$from
+  }
+  const isTextBlock = (node: PMNode) => ['paragraph', 'heading'].includes(node.type.name) && node.attrs.id
+  function currentBlockId(): string | undefined {
+    const $pos = caretPosition()
+    if (!$pos) return
+    for (let depth = $pos.depth; depth >= 0; depth--) { const node = $pos.node(depth); if (isTextBlock(node)) return node.attrs.id as string }
+    // Between blocks (e.g. a click that landed on the editor root): prefer the block just before the position.
+    const near = $pos.nodeBefore ?? $pos.nodeAfter
+    if (near && isTextBlock(near)) return near.attrs.id as string
   }
   function currentBlockChain(): string[] {
-    if (!editor) return []
+    const $pos = caretPosition()
+    if (!$pos) return []
     const ids: string[] = []
-    const $from = editor.state.selection.$from
-    for (let depth = $from.depth; depth >= 0; depth--) { const node = $from.node(depth); if (node.attrs?.id) ids.push(node.attrs.id) }
+    for (let depth = $pos.depth; depth >= 0; depth--) { const node = $pos.node(depth); if (node.attrs?.id) ids.push(node.attrs.id) }
     const first = currentBlockId(); if (first && !ids.includes(first)) ids.unshift(first)
     return ids
   }
