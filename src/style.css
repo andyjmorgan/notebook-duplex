@@ -8,6 +8,7 @@
   --ui-success: #2a7e41; --ui-success-soft: #ecf9ef; --ui-danger: #bc2b3c; --ui-danger-soft: #fdebed; --ui-warning: #c15800; --ui-warning-soft: #fff6e3;
   --shadow-soft: 0 1px 2px rgba(28,43,52,.06), 0 6px 20px rgba(28,43,52,.06);
   --ease: cubic-bezier(.2,.8,.2,1);
+  --claude-mark: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22 fill=%22%23d97757%22 width=%2212%22 height=%2212%22%3E%3Cpath d=%22m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z%22%3E%3C/path%3E%3C/svg%3E");
 }
 * { box-sizing: border-box } body { margin: 0 } button, input, select, textarea { font: inherit }
 button { cursor: pointer; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; padding: 5px 9px; min-height: 28px; line-height: 18px; transition: background .15s, color .15s, border-color .15s }
@@ -69,7 +70,7 @@ button kbd { margin-left: 8px; opacity: .8 } .primary kbd { background: rgba(255
 .tiptap .has-suggestion::before { background: var(--ui-brand) } .tiptap .has-suggestion.stale::before { background: #f3b04e }
 .tiptap .agent-queued::before { background: repeating-linear-gradient(to bottom, var(--ui-border-strong) 0 6px, transparent 6px 10px) }
 .tiptap .agent-active::before { background: linear-gradient(to bottom, var(--ui-ai) var(--progress, 0%), #dfe3ff var(--progress, 0%)); box-shadow: 0 0 0 0 rgba(94,109,214,.35); animation: breathe 1.8s infinite }
-.tiptap .agent-active::after, .tiptap .agent-queued::after { content: "✦ " attr(data-agent); position: absolute; right: -8px; top: -16px; font-size: 10px; color: var(--ui-ai); background: var(--ui-ai-soft); border: 1px solid #dfe3ff; border-radius: 10px; padding: 1px 8px; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: rise .25s var(--ease) }
+.tiptap .agent-active::after, .tiptap .agent-queued::after { content: var(--claude-mark) "  " attr(data-agent); position: absolute; right: -8px; top: -16px; font-size: 10px; color: var(--ui-ai); background: var(--ui-ai-soft); border: 1px solid #dfe3ff; border-radius: 10px; padding: 1px 8px; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: rise .25s var(--ease) }
 .tiptap .agent-queued::after { color: var(--ui-text-tertiary); background: var(--ui-background-secondary); border-color: var(--ui-border) }
 .tiptap .agent-active { background: #eef0ff; border-radius: 6px; margin-left: -10px; padding-left: 10px; margin-right: -10px; padding-right: 10px; box-shadow: inset 0 0 0 1px #dfe3ff }
 @keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: .55 } }
@@ -153,8 +154,9 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 
 /* Inline [tk: …] directives */
 .tiptap .tk-chip { background: var(--ui-brand-soft); color: var(--ui-brand-contrast); border: 1px solid #dccdf3; border-radius: 6px; padding: 1px 6px 1px 5px; font-family: "Roboto Mono", monospace; font-size: .92em; box-decoration-break: clone; -webkit-box-decoration-break: clone; transition: background .2s, border-color .2s }
-.tiptap .tk-chip::before { content: "✦ "; color: var(--ui-brand); font-family: "Noto Sans", sans-serif; font-size: .9em }
-.tiptap .tk-chip.tk-working::before { color: var(--ui-ai) } .tiptap .tk-chip.tk-done::before { color: var(--ui-success) } .tiptap .tk-chip.tk-queued::before { color: var(--ui-text-tertiary) }
+.tiptap .tk-chip::before { content: var(--claude-mark); display: inline-block; vertical-align: -1px; margin-right: 5px; line-height: 0 }
+.tiptap .tk-chip.tk-working::before { animation: spin 2.4s linear infinite } .tiptap .tk-chip.tk-done::before, .tiptap .tk-chip.tk-queued::before { opacity: .55 }
+@keyframes spin { to { transform: rotate(360deg) } }
 .tiptap .tk-chip.open { border-style: dashed; background: #faf7ff }
 .tiptap .tk-chip.open::after { content: "  ] sends"; color: var(--ui-text-tertiary); font-size: 10px; font-family: "Noto Sans", sans-serif; letter-spacing: .2px }
 .tiptap .tk-chip.tk-queued { border-color: var(--ui-border-strong); background: var(--ui-background-secondary); color: var(--ui-text-secondary) }
