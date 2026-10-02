@@ -271,6 +271,11 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.waitForSelector('.tiptap img')
   assert.equal(await page.getAttribute('.tiptap img', 'alt'), 'A dot')
 
+  // Pasting Markdown that contains an image renders the image
+  await page.click('.tiptap > p:nth-of-type(1)'); await page.waitForTimeout(80); await page.keyboard.press('Control+End'); await page.keyboard.press('Enter')
+  await page.evaluate(text => { const dt = new DataTransfer(); dt.setData('text/plain', text); document.querySelector('.tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })) }, '![Pasted logo](data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)')
+  await until(async () => (await page.locator('.tiptap img[alt="Pasted logo"]').count()) === 1)
+
   // Mermaid fences render as diagrams
   await page.setInputFiles('input[type=file]', { name: 'diagram.md', mimeType: 'text/markdown', buffer: Buffer.from('# Flow\n\n```mermaid\nflowchart LR\n  A[Write] --> B[Review]\n```\n') })
   await page.waitForSelector('.mermaid-preview svg', { timeout: 20000 })

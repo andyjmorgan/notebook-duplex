@@ -73,7 +73,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
         {pending.length ? pending.map(p => (
           <button key={p.id} className="review-link" onClick={() => onLocate(p)}>
             <span className={`review-dot ${p.stale ? 'stale' : p.type}`} />
-            <span className="review-text">{p.type === 'comment' ? 'Comment · ' : p.stale ? 'Changed · ' : p.type === 'insert' ? 'Addition · ' : p.type === 'move' ? 'Move · ' : 'Edit · '}{(p.text || p.explanation || p.after || p.markdown || p.preview?.[0] || '').split('\n')[0]}</span>
+            <span className="review-text">{p.type === 'comment' ? 'Comment · ' : p.stale ? 'Changed · ' : p.type === 'insert' ? 'Addition · ' : p.type === 'move' ? 'Move · ' : p.type === 'replace_text' ? `Replace ${p.count}× · ` : 'Edit · '}{(p.type === 'replace_text' ? `${p.find} → ${p.replace}` : p.text || p.explanation || p.after || p.markdown || p.preview?.[0] || '').split('\n')[0]}</span>
             <span className="review-go">↗</span>
           </button>
         )) : <p className="rail-muted small">Suggestions appear inside the document, right where they apply.</p>}

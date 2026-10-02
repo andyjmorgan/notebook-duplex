@@ -44,6 +44,7 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   for (const p of proposals) if (p.type === 'replace' && p.blockId) mark(p.blockId, p.stale ? 'has-suggestion stale' : 'has-suggestion')
   for (const p of proposals) if (p.type === 'comment' && p.blockId) mark(p.blockId, 'has-comment')
   for (const p of proposals) if (p.type === 'move') for (const id of p.blockIds ?? []) mark(id, 'will-move')
+  for (const p of proposals) if (p.type === 'replace_text') for (const e of p.edits ?? []) mark(e.blockId, 'has-suggestion')
 
   const topLevel = topLevelPositions(doc)
   // Blocks inside a table: lift agent presence onto the table itself, keep the cells quiet.
@@ -66,7 +67,11 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   })
   for (const p of proposals) {
     let at: number | undefined
-    if ((p.type === 'replace' || p.type === 'comment') && p.blockId) {
+    if (p.type === 'replace_text') {
+      const firstId = p.edits?.[0]?.blockId
+      if (firstId) doc.descendants((node, pos) => { if (node.attrs?.id === firstId) { at = pos + node.nodeSize; return false } return at === undefined })
+      if (at === undefined) at = 0
+    } else if ((p.type === 'replace' || p.type === 'comment') && p.blockId) {
       const table = tableOf.get(p.blockId)
       if (table?.attrs?.id && topLevel.has(table.attrs.id)) { const t = topLevel.get(table.attrs.id)!; at = t.pos + t.node.nodeSize }
       else doc.descendants((node, pos) => { if (node.attrs?.id === p.blockId) { at = pos + node.nodeSize; return false } return at === undefined })

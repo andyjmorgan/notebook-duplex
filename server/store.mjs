@@ -174,6 +174,7 @@ export class Store {
   }
   // A scoped cell brings its table into scope, and a scoped table brings its cells.
   inScope(job, block) {
+    if (job.kind !== 'proofread') return true
     if (!job.blockIds.length) return true
     if (job.blockIds.includes(block.id)) return true
     if (block.topLevelId && job.blockIds.includes(block.topLevelId)) return true
@@ -261,6 +262,26 @@ export class Store {
       this.state.proposals.push(proposal)
       return proposal
     }
+    if (type === 'replace_text') {
+      const find = String(input.find ?? '')
+      const replace = String(input.replace ?? '')
+      if (!find) throw new Error('replace_text needs a non-empty find string')
+      if (find.length > 500 || replace.length > 2000) throw new Error('find and replace must be short strings')
+      const caseSensitive = input.caseSensitive !== false
+      const wanted = input.blockIds?.length ? new Set(input.blockIds) : null
+      const matcher = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'g' : 'gi')
+      const edits = []
+      for (const block of job.snapshot.blocks) {
+        if (block.type === 'table' || (wanted && !wanted.has(block.id)) || !block.text) continue
+        const after = block.text.replace(matcher, replace)
+        if (after !== block.text) edits.push({ blockId: block.id, blockRevision: block.revision, before: block.text, after, count: (block.text.match(matcher) ?? []).length })
+      }
+      if (!edits.length) throw new Error(`"${find}" does not occur in the ${wanted ? 'selected' : ''} blocks`)
+      if (edits.length > 400) throw new Error('Too many blocks affected; narrow the request')
+      const proposal = { ...base, find, replace, caseSensitive, edits, count: edits.reduce((n, e) => n + e.count, 0) }
+      this.state.proposals.push(proposal)
+      return proposal
+    }
     if (type === 'move') {
       const ids = [...new Set(input.blockIds ?? [])]
       if (!ids.length) throw new Error('move needs blockIds: a contiguous run of top-level blocks')
@@ -320,6 +341,7 @@ export class Store {
     if (!doc) return true
     if (proposal.type === 'insert') return topLevelIndex(doc, proposal.anchorBlockId) === -1
     if (proposal.type === 'comment') return !findNode(doc, proposal.blockId)
+    if (proposal.type === 'replace_text') return !proposal.edits.some(e => { const n = findNode(doc, e.blockId); return n && hash(n) === e.blockRevision })
     if (proposal.type === 'move') {
       const order = (doc.content ?? []).map(n => n.attrs?.id)
       const idx = proposal.blockIds.map(id => order.indexOf(id))
@@ -342,6 +364,22 @@ export class Store {
     if (decision !== 'accept') throw new Error('Invalid review decision')
     if (this.isStale(proposal)) { proposal.status = 'stale'; return { proposal, stale: true } }
     const doc = this.state.document.json
+    if (proposal.type === 'replace_text') {
+      const applied = [], skipped = []
+      for (const edit of proposal.edits) {
+        const node = findNode(doc, edit.blockId)
+        if (!node || hash(node) !== edit.blockRevision) { skipped.push(edit.blockId); continue }
+        const content = options.contents?.[edit.blockId]
+        node.content = content ? validateInlineContent(content) : [{ type: 'text', text: edit.after }]
+        applied.push({ blockId: edit.blockId, content: node.content })
+      }
+      if (!applied.length) { proposal.status = 'stale'; return { proposal, stale: true } }
+      this.state.document.revision++
+      proposal.status = 'accepted'
+      proposal.reviewedAt = Date.now()
+      proposal.applied = applied.length; proposal.skipped = skipped.length
+      return { proposal, document: this.state.document, applied, skipped }
+    }
     if (proposal.type === 'move') {
       const order = doc.content.map(n => n.attrs?.id)
       const first = order.indexOf(proposal.blockIds[0])

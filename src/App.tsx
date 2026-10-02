@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { createPortal } from 'react-dom'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import type { Editor } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { TableKit } from '@tiptap/extension-table'
 import UniqueID from '@tiptap/extension-unique-id'
@@ -80,7 +81,7 @@ export function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   stateRef.current = state
   // Editor key handlers are created once; they reach the latest render through this ref.
-  const live = useRef({ openCommand: (_initial?: string, _selection?: string) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {} })
+  const live = useRef({ openCommand: (_initial?: string, _selection?: string) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {}, editor: (): Editor | null => null })
 
   const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
 
@@ -89,6 +90,22 @@ export function App() {
     content: initialMarkdown, contentType: 'markdown', editable: false,
     editorProps: {
       attributes: { 'aria-label': 'Document', spellcheck: 'true' },
+      // Plain-text pastes that look like Markdown (images, headings, lists, tables, fences) are parsed as Markdown.
+      handlePaste(view, event) {
+        const text = event.clipboardData?.getData('text/plain') ?? ''
+        const html = event.clipboardData?.getData('text/html') ?? ''
+        if (!text || html || !/!\[[^\]]*\]\([^)]+\)|^\s*(#{1,6} |[-*+] |\d+\. |> |```|\|.*\|)/m.test(text)) return false
+        const ed = live.current.editor()
+        const parsed = ed?.markdown?.parse(text)
+        if (!ed || !parsed?.content?.length) return false
+        event.preventDefault()
+        const $from = view.state.selection.$from
+        const onlyInline = parsed.content.length === 1 && parsed.content[0].type === 'paragraph'
+        const emptyBlock = $from.parent.isTextblock && $from.parent.content.size === 0
+        if (onlyInline && !emptyBlock) ed.chain().focus().insertContent(parsed.content[0].content ?? []).run()
+        else ed.chain().focus().insertContent(parsed.content).run()
+        return true
+      },
       handleKeyDown(view, event) {
         if (slashRef.current.open && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
           event.preventDefault()
@@ -343,6 +360,21 @@ export function App() {
     if (!editor) return
     if (mode !== 'editing') throw new Error('Switch to Editing to review changes.')
     await flush()
+    if (proposal.type === 'replace_text') {
+      const contents: Record<string, any[]> = {}
+      for (const e of proposal.edits ?? []) { if (!e.after.trim()) continue; const first = editor.markdown?.parse(e.after)?.content?.[0]; if (first?.content?.length) contents[e.blockId] = first.content }
+      const result = await api('/api/review', { id: proposal.id, decision: 'accept', contents })
+      if (result.stale) { notify('Every affected block changed since, so nothing was replaced.'); return }
+      setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'accepted' } : p) })
+      const targets = (result.applied as { blockId: string; content: any[] }[]).map(a => ({ ...a, pos: blockPosition(a.blockId) })).filter(a => a.pos).sort((a, b) => b.pos!.pos - a.pos!.pos)
+      let tr = editor.state.tr
+      for (const t of targets) tr = tr.replaceWith(t.pos!.pos + 1, t.pos!.pos + t.pos!.size - 1, t.content.map((n: any) => editor.schema.nodeFromJSON(n)))
+      editor.view.dispatch(tr)
+      revision.current = result.document.revision
+      dirty.current = false; setSaveState('Saved'); queueSync()
+      notify(`Replaced in ${result.applied.length} ${result.applied.length === 1 ? 'block' : 'blocks'}${result.skipped.length ? `, skipped ${result.skipped.length} you had changed` : ''}. ⌘Z undoes it.`)
+      return
+    }
     if (proposal.type === 'move') {
       const result = await api('/api/review', { id: proposal.id, decision: 'accept' })
       if (result.stale) { notify('The blocks or anchor changed, so this move no longer applies.'); return }
@@ -416,7 +448,7 @@ export function App() {
   const cancelJob = async (id: string) => { await api('/api/cancel', { id }); void refresh() }
   const demo = async () => { try { await flush(); await api('/api/demo', { blockId: currentBlockId() }); void refresh() } catch (e) { notify((e as Error).message) } }
   function locate(proposal: Proposal) {
-    const id = proposal.type === 'insert' || proposal.type === 'move' ? proposal.anchorBlockId! : proposal.blockId!
+    const id = proposal.type === 'insert' || proposal.type === 'move' ? proposal.anchorBlockId! : proposal.type === 'replace_text' ? proposal.edits?.[0]?.blockId ?? '' : proposal.blockId!
     const pos = blockPosition(id)
     if (!pos || !editor) return
     editor.commands.setTextSelection(pos.pos + 1); editor.commands.scrollIntoView()
@@ -504,7 +536,7 @@ export function App() {
     ]
   })() : []
 
-  live.current = { openCommand, executeSlash, accept, currentBlockId, currentBlockChain, onUpdate: onEditorUpdate }
+  live.current = { openCommand, executeSlash, accept, currentBlockId, currentBlockChain, onUpdate: onEditorUpdate, editor: () => editor }
 
   if (authed === false) return <KeyGate onSubmit={submitKey} error={gateError} />
   if (!editor) return null

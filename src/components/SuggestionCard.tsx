@@ -28,6 +28,31 @@ export function SuggestionCard({ proposal, session, busy, parseMarkdown, onAccep
   const removal = proposal.type === 'replace' && (proposal.after ?? '') === ''
   const kind = proposal.type === 'comment' ? (proposal.stale ? 'Comment · section removed' : 'Comment') : proposal.stale ? (proposal.blockType === 'table' ? 'Table changed' : 'Paragraph changed') : proposal.type === 'insert' ? 'Suggested addition' : removal ? 'Suggested removal' : proposal.blockType === 'table' ? 'Suggested table edit' : 'Suggested edit'
 
+  if (proposal.type === 'replace_text') {
+    const edits = proposal.edits ?? []
+    return (
+      <aside className={`suggestion batch ${proposal.stale ? 'stale' : ''}`} aria-label="Suggested find and replace">
+        <header className="suggestion-head"><span className="suggestion-kind">{proposal.stale ? 'Replacement no longer applies' : 'Suggested replacement everywhere'}</span><span className="suggestion-who">{who}</span></header>
+        <p className="suggestion-text"><del>{proposal.find}</del> → <ins>{proposal.replace || '(remove)'}</ins> · {proposal.count} {proposal.count === 1 ? 'occurrence' : 'occurrences'} in {edits.length} {edits.length === 1 ? 'block' : 'blocks'}</p>
+        <div className="batch-edits">{edits.slice(0, 8).map(e => <DiffView key={e.blockId} before={e.before} after={e.after} />)}{edits.length > 8 && <p className="suggestion-text">…and {edits.length - 8} more</p>}</div>
+        {proposal.explanation && <p className="suggestion-why">{proposal.explanation}</p>}
+        <div className="suggestion-actions">
+          {proposal.stale ? <button className="quiet small" disabled={busy} onClick={() => run(() => onReject(proposal))}>Dismiss</button> : <>
+            <button className="primary small" disabled={busy} onClick={() => run(() => onAccept(proposal, ''))}>Replace all</button>
+            <button className="quiet small" disabled={busy} onClick={() => run(() => onReject(proposal))}>Reject</button>
+            <button className="quiet small" disabled={busy} onClick={() => { setNote(''); setMode('reconsider') }}>Reconsider…</button>
+          </>}
+        </div>
+        {mode === 'reconsider' && !proposal.stale && (
+          <form className="reconsider" onSubmit={e => { e.preventDefault(); if (note.trim()) run(() => onReconsider(proposal, note.trim())) }}>
+            <textarea ref={textarea} value={note} rows={2} placeholder={`Tell ${who} what to change…`} onChange={e => setNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (note.trim()) run(() => onReconsider(proposal, note.trim())) } }} aria-label="Note for the agent" />
+            <div className="suggestion-actions"><button type="submit" className="primary small" disabled={busy || !note.trim()}>Send note</button><button type="button" className="quiet small" onClick={() => setMode('view')}>Back</button></div>
+          </form>
+        )}
+        {error && <p className="suggestion-error" role="alert">{error}</p>}
+      </aside>
+    )
+  }
   if (proposal.type === 'move') {
     return (
       <aside className={`suggestion move ${proposal.stale ? 'stale' : ''}`} aria-label="Suggested move">
