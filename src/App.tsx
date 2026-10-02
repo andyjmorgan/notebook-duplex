@@ -396,13 +396,6 @@ export function App() {
       if (r.top < 150 || r.bottom > window.innerHeight - 110) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     })
   }
-  function runDirective() {
-    const id = currentBlockId(); let text = ''
-    editor?.state.doc.descendants(node => { if (node.attrs?.id === id) text = node.textContent })
-    const directive = text.match(/^\[tk:\s*([\s\S]+?)\]$/)
-    if (!directive) { notify('Place the caret in a paragraph containing [tk: your request].'); return }
-    openCommand(directive[1])
-  }
   function executeSlash(cmd?: string) {
     if (!cmd || !editor) return
     const sel = editor.state.selection
@@ -673,7 +666,7 @@ export function App() {
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>
-        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} onRejectAll={rejectAll} busy={busy} onNotify={notify} reading={reading.status !== 'idle'} held={held} onStopReading={() => player.stop()} />
+        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} onRejectAll={rejectAll} busy={busy} onNotify={notify} reading={reading.status !== 'idle'} held={held} onStopReading={() => player.stop()} />
       </div>
       {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy || reading.status !== 'idle'} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />

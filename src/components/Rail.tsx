@@ -8,7 +8,7 @@ type Props = {
   jobs: Job[]; activity: Activity[]; proposals: Proposal[]
   mcpUrl: string; apiKey: string
   proofread: boolean; onProofread: (on: boolean) => void
-  onAsk: () => void; onDirective: () => void; onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; onRejectAll: () => Promise<void>; busy: boolean
+  onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; onRejectAll: () => Promise<void>; busy: boolean
   onNotify: (message: string) => void
   reading: boolean; held: HeldRequest[]; onStopReading: () => void
 }
@@ -16,7 +16,7 @@ const active = (j: Job) => ['queued', 'running', 'needs_permission'].includes(j.
 const stateVerb: Record<string, string> = { reading: 'Reading', thinking: 'Thinking', writing: 'Writing', waiting: 'Waiting on you', done: 'Finishing' }
 const statusLabel: Record<string, string> = { queued: 'Queued', needs_permission: 'Needs permission in Claude\'s terminal', abandoned: 'Abandoned' }
 
-export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onAcceptAll, onRejectAll, busy, onNotify, reading, held, onStopReading }: Props) {
+export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onDemo, onCancel, onLocate, onAcceptAll, onRejectAll, busy, onNotify, reading, held, onStopReading }: Props) {
   const [showKey, setShowKey] = useState(false)
   const connected = sessions.filter(s => s.connected)
   const current = connected.find(s => s.id === sessionId)
@@ -42,10 +42,6 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
         ) : (
           <p className="rail-muted">No Claude session connected. Open <strong>Connect</strong> below to add this notebook to a session.</p>
         )}
-        <div className="agent-actions">
-          <button className="primary" onClick={onAsk} disabled={!connected.length}>✦ Ask<kbd>⌘K</kbd></button>
-          <button className="quiet" onClick={onDirective} disabled={!connected.length} title="Run the [tk: …] directive in the current paragraph">Run [tk]</button>
-        </div>
         <label className="proofreading" title={reading ? 'Paused while the document is being read aloud.' : undefined}><input type="checkbox" checked={proofread} disabled={!connected.length || reading} onChange={e => onProofread(e.target.checked)} /> Proofread settled paragraphs <span className="beta">EXPERIMENTAL</span></label>
       </section>
 
