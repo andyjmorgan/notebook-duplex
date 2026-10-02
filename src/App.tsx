@@ -68,7 +68,8 @@ export function App() {
   const buildRef = useRef<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [proofread, setProofread] = useState(false)
-  const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; selection?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
+  const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; selection?: string; scopeLabel?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
+  useEffect(() => { const onAsk = (e: Event) => { const d = (e as CustomEvent).detail; live.current.openCommand('', undefined, { blockId: d.blockId, label: d.label }) }; window.addEventListener('notebook:ask', onAsk); return () => window.removeEventListener('notebook:ask', onAsk) }, [])
   const [menu, setMenu] = useState<{ x: number; y: number; selection: string; blockId?: string } | null>(null)
   const [markers, setMarkers] = useState<Marker[]>([])
   const [tick, setTick] = useState(0)
@@ -87,7 +88,7 @@ export function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   stateRef.current = state
   // Editor key handlers are created once; they reach the latest render through this ref.
-  const live = useRef({ openCommand: (_initial?: string, _selection?: string) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {}, editor: (): Editor | null => null })
+  const live = useRef({ openCommand: (_initial?: string, _selection?: string, _scope?: { blockId: string; label: string }) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {}, editor: (): Editor | null => null })
 
   const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
 
@@ -316,10 +317,10 @@ export function App() {
     return () => clearInterval(timer)
   }, [proofread, editor, sessionId, busy])
 
-  function openCommand(initial = '', selection?: string) {
+  function openCommand(initial = '', selection?: string, explicitScope?: { blockId: string; label: string }) {
     if (!editor || !ready.current) return
     if (mode !== 'editing') { notify('Switch to Editing to ask the agent.'); return }
-    const scopeId = currentBlockId()
+    const scopeId = explicitScope?.blockId ?? currentBlockId()
     const { from, to } = editor.state.selection
     selection ??= from !== to ? editor.state.doc.textBetween(from, to, ' ').trim() || undefined : undefined
     const page = pageRef.current
@@ -330,7 +331,7 @@ export function App() {
       const coords = editor.view.coordsAtPos(pos ? pos.pos + pos.size - 1 : editor.state.selection.from)
       anchor = { top: coords.bottom - rect.top + 10, left: 0 }
     }
-    setCommand({ open: true, initial, scopeId, selection, anchor })
+    setCommand({ open: true, initial, scopeId, selection, anchor, scopeLabel: explicitScope?.label })
   }
   function closeCommand() { setCommand(c => ({ ...c, open: false })); editor?.commands.focus() }
   async function submitCommand(instruction: string, whole: boolean) {
@@ -419,7 +420,7 @@ export function App() {
     } else {
       // Paragraph and heading text travels as inline Markdown; parse it here so marks survive.
       let content: any[] | undefined
-      if (proposal.blockType !== 'table' && edited.trim()) {
+      if (proposal.blockType !== 'table' && proposal.blockType !== 'codeBlock' && edited.trim()) {
         const parsed = editor.markdown?.parse(edited)
         const first = parsed?.content?.[0]
         if (first?.content?.length) content = first.content
@@ -593,7 +594,7 @@ export function App() {
           <div className={`page ${mode}`} ref={pageRef} onContextMenu={onContextMenu}>
             <OffscreenMarkers markers={markers} tick={tick} container={pageRef} />
             <EditorContent editor={editor} />
-            <CommandBar open={command.open} anchor={command.anchor} initial={command.initial} selection={command.selection} scopeLabel={command.scopeId ? 'This paragraph' : 'Around the caret'} sessions={sessions} sessionId={sessionId} onSessionChange={setSessionId} onSubmit={submitCommand} onClose={closeCommand} />
+            <CommandBar open={command.open} anchor={command.anchor} initial={command.initial} selection={command.selection} scopeLabel={command.scopeLabel ?? (command.scopeId ? 'This paragraph' : 'Around the caret')} sessions={sessions} sessionId={sessionId} onSessionChange={setSessionId} onSubmit={submitCommand} onClose={closeCommand} />
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>

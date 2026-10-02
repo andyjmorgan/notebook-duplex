@@ -17,7 +17,22 @@ Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a sin
 - **Nothing hides off-screen.** Floating pills at the top and bottom of the page count suggestions and working agents outside the viewport and scroll you to the nearest one.
 - **Keyboard review.** With the caret in a paragraph that has a suggestion, `⌘↵` accepts it. `⌘Z` undoes any accepted change.
 - **Stale protection.** If you rewrite a paragraph after a suggestion was written, the suggestion is marked as changed and cannot be applied. Writing anywhere else leaves it alive.
-- Rich text formatting, GFM tables with row and column controls, images, Mermaid diagrams (a ```mermaid fence shows as a diagram with a Source tab; the source opens when the caret enters the block and the diagram returns when it leaves), slash insert menu, outline, Reading mode, Markdown import and export. Background proofreading treats a table as one unit rather than cell by cell.
+- Rich text formatting, GFM tables with row and column controls, images, Mermaid diagrams (a ```mermaid fence shows as a diagram with a Source tab and an expand button; the source opens when the caret enters the block). Tune a diagram with Mermaid front matter, or the theme, look and layout pickers in its header, which write that front matter for you:
+
+  ```mermaid
+  ---
+  config:
+    theme: forest
+    look: handDrawn
+    layout: tidy-tree
+  ---
+  mindmap
+    root((Notebook))
+      Writer
+      Claude
+  ```
+
+  Themes: `default`, `neutral`, `forest`, `dark`, `base` (with `themeVariables`). Looks: `classic`, `handDrawn`, `neo`. Layouts: `dagre` or `elk` for flowcharts, state, class and ER diagrams; `cose` or `tidy-tree` for mindmaps. Any other Mermaid `config` key works too, slash insert menu, outline, Reading mode, Markdown import and export. Background proofreading treats a table as one unit rather than cell by cell.
 
 ## Connect a Claude session
 

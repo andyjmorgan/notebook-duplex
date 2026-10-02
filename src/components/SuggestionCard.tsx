@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Proposal, Session } from '../types'
-import { DiffView, TableDiff } from './DiffView'
+import { DiffView, TableDiff, CodeDiff } from './DiffView'
+import { MermaidPreview } from '../editor/mermaid'
 import { MarkdownPreview } from './MarkdownPreview'
 
 type Props = {
@@ -16,7 +17,7 @@ type Props = {
 }
 
 export function SuggestionCard({ proposal, session, busy, parseMarkdown, onAccept, onReject, onReconsider, onResolve, onReply }: Props) {
-  const [mode, setMode] = useState<'view' | 'edit' | 'reconsider' | 'preview'>(proposal.type === 'insert' ? 'preview' : 'view')
+  const [mode, setMode] = useState<'view' | 'edit' | 'reconsider' | 'preview'>(proposal.type === 'insert' || (proposal.blockType === 'codeBlock' && proposal.blockLanguage === 'mermaid') ? 'preview' : 'view')
   const [draft, setDraft] = useState(proposal.type === 'insert' ? proposal.markdown ?? '' : proposal.after ?? '')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
@@ -26,7 +27,7 @@ export function SuggestionCard({ proposal, session, busy, parseMarkdown, onAccep
   const run = (fn: () => Promise<void>) => fn().catch(e => setError(e.message))
   const who = session?.name ?? 'Claude'
   const removal = proposal.type === 'replace' && (proposal.after ?? '') === ''
-  const kind = proposal.type === 'comment' ? (proposal.stale ? 'Comment · section removed' : 'Comment') : proposal.stale ? (proposal.blockType === 'table' ? 'Table changed' : 'Paragraph changed') : proposal.type === 'insert' ? 'Suggested addition' : removal ? 'Suggested removal' : proposal.blockType === 'table' ? 'Suggested table edit' : 'Suggested edit'
+  const kind = proposal.type === 'comment' ? (proposal.stale ? 'Comment · section removed' : 'Comment') : proposal.stale ? (proposal.blockType === 'table' ? 'Table changed' : proposal.blockType === 'codeBlock' ? 'Block changed' : 'Paragraph changed') : proposal.type === 'insert' ? 'Suggested addition' : removal ? 'Suggested removal' : proposal.blockType === 'table' ? 'Suggested table edit' : proposal.blockType === 'codeBlock' ? (proposal.blockLanguage === 'mermaid' ? 'Suggested diagram edit' : 'Suggested code edit') : 'Suggested edit'
 
   if (proposal.type === 'replace_text') {
     const edits = proposal.edits ?? []
@@ -100,9 +101,11 @@ export function SuggestionCard({ proposal, session, busy, parseMarkdown, onAccep
       {proposal.stale ? (
         <p className="suggestion-text">You changed this part of the document after the suggestion was written, so it no longer applies.</p>
       ) : mode === 'preview' ? (
-        <MarkdownPreview markdown={draft} parse={parseMarkdown} inline={proposal.type === 'replace' && proposal.blockType !== 'table'} />
+        proposal.blockType === 'codeBlock' ? (proposal.blockLanguage === 'mermaid' ? <MermaidPreview source={draft} /> : <pre className="code-diff"><div className="code-line">{draft}</div></pre>) : <MarkdownPreview markdown={draft} parse={parseMarkdown} inline={proposal.type === 'replace' && proposal.blockType !== 'table'} />
       ) : mode === 'edit' || (proposal.type === 'insert' && mode === 'view') ? (
         <textarea ref={textarea} className="suggestion-editor" value={draft} rows={Math.min(14, Math.max(2, draft.split('\n').length + 1))} onChange={e => setDraft(e.target.value)} aria-label="Proposed text" spellCheck />
+      ) : proposal.blockType === 'codeBlock' ? (
+        <CodeDiff before={proposal.before ?? ''} after={proposal.after ?? ''} />
       ) : proposal.blockType === 'table' ? (
         <TableDiff before={proposal.before ?? ''} after={proposal.after ?? ''} />
       ) : (

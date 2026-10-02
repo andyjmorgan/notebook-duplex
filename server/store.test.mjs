@@ -312,3 +312,15 @@ test('replace_text batches a document-wide rename into one proposal and skips bl
   assert.equal(store.snapshot().blocks[0].text, 'The gizmo team ships gizmos (x).')
   assert.equal(store.snapshot().blocks[2].text, 'Rewritten by the writer.')
 })
+test('code blocks are replace targets with multi-line source', () => {
+  const store = new Store()
+  store.sync({ json: { type: 'doc', content: [{ type: 'codeBlock', attrs: { id: 'c', language: 'mermaid' }, content: [{ type: 'text', text: 'flowchart LR\n  A --> B' }] }] }, expectedRevision: 0 })
+  const block = store.snapshot().blocks[0]
+  assert.equal(block.type, 'codeBlock'); assert.equal(block.language, 'mermaid')
+  const job = store.enqueue({ instruction: 'fix', sessionId: 's', blockIds: ['c'] }); store.claim(job.id, 's')
+  const p = store.propose({ jobId: job.id, blockId: 'c', blockRevision: block.revision, before: block.text, after: 'flowchart LR\n  A --> B\n  B --> C', explanation: 'adds C' }, 's')
+  assert.equal(p.blockLanguage, 'mermaid')
+  const result = store.review(p.id, 'accept')
+  assert.equal(result.document.json.content[0].content[0].text, 'flowchart LR\n  A --> B\n  B --> C')
+  assert.equal(result.document.json.content[0].attrs.language, 'mermaid')
+})

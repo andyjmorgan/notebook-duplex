@@ -39,3 +39,18 @@ export function TableDiff({ before, after }: { before: string; after: string }) 
     </div>
   )
 }
+
+export function CodeDiff({ before, after }: { before: string; after: string }) {
+  const segments = useMemo(() => {
+    const a = before.split('\n'), b = after.split('\n')
+    const n = a.length, m = b.length
+    const table: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1])
+    const out: { type: 'equal' | 'del' | 'ins'; text: string }[] = []
+    let i = 0, j = 0
+    while (i < n && j < m) { if (a[i] === b[j]) { out.push({ type: 'equal', text: a[i] }); i++; j++ } else if (table[i + 1][j] >= table[i][j + 1]) out.push({ type: 'del', text: a[i++] }); else out.push({ type: 'ins', text: b[j++] }) }
+    while (i < n) out.push({ type: 'del', text: a[i++] }); while (j < m) out.push({ type: 'ins', text: b[j++] })
+    return out
+  }, [before, after])
+  return <pre className="code-diff">{segments.map((s, i) => <div key={i} className={`code-line ${s.type}`}><span className="gutter">{s.type === 'del' ? '−' : s.type === 'ins' ? '+' : ' '}</span>{s.text || ' '}</div>)}</pre>
+}

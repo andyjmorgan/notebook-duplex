@@ -308,6 +308,33 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await shot('mermaid-modal')
   await page.keyboard.press('Escape')
   await page.waitForSelector('dialog.mermaid-modal', { state: 'detached' })
+
+  // Tuning via front matter: the theme picker writes it, and the diagram re-renders
+  await page.hover('.mermaid-preview')
+  await page.selectOption('.diagram-tuning select[aria-label="Theme"]', 'forest')
+  await until(async () => (await (await request('/api/state')).data.document.json.content.find(n => n.type === 'codeBlock')).content[0].text.startsWith('---\nconfig:\n  theme: forest'))
+  await page.waitForSelector('.mermaid-preview svg', { timeout: 20000 })
+
+  // Ask Claude about the diagram from its own button; the agent replaces the source and the card previews the new diagram
+  await page.hover('.mermaid-preview'); await page.click('.mermaid-ask')
+  await page.waitForSelector('.command-bar')
+  assert.equal(await page.locator('.scope-toggle button').first().textContent(), 'This diagram')
+  await page.keyboard.type('Add a Deploy step.')
+  await page.keyboard.press('Enter')
+  const diagEvent = await until(() => notifications.find(n => /Deploy step/.test(n.content)))
+  const diagClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: diagEvent.meta.job_id } })).content[0].text)
+  const diagBlock = diagClaim.snapshot.blocks.find(b => b.type === 'codeBlock')
+  assert.equal(diagBlock.language, 'mermaid')
+  const diagProposal = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: diagClaim.id, type: 'replace', blockId: diagBlock.id, blockRevision: diagBlock.revision, before: diagBlock.text, after: diagBlock.text + '\n  C --> D[Deploy]', explanation: 'adds Deploy' } })).content[0].text)
+  await page.waitForSelector(`.suggestion-host[data-proposal="${diagProposal.id}"] .mermaid-preview svg`, { timeout: 20000 })
+  await shot('diagram-suggestion')
+  await page.click(`.suggestion-host[data-proposal="${diagProposal.id}"] button:has-text("Accept")`)
+  await until(async () => (await page.locator('.mermaid-block .mermaid-preview svg').innerHTML()).includes('Deploy'), 20000)
+
+  // Mindmap with the tidy-tree layout engine
+  await page.setInputFiles('input[type=file]', { name: 'mm.md', mimeType: 'text/markdown', buffer: Buffer.from('# Map\n\n```mermaid\n---\nconfig:\n  layout: tidy-tree\n---\nmindmap\n  root((Notebook))\n    Writer\n    Claude\n```\n') })
+  await page.waitForSelector('.mermaid-preview svg', { timeout: 30000 })
+  assert.equal(await page.locator('.mermaid-error').count(), 0, 'tidy-tree layout is registered')
   await shot('mermaid')
   assert.deepEqual(errors, [])
 })

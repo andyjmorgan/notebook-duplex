@@ -3,7 +3,7 @@ export type Proposal = {
   id: string; type: 'replace' | 'insert' | 'comment' | 'move' | 'replace_text'; jobId: string; text?: string; blockIds?: string[]; preview?: string[]; anchorText?: string;
   find?: string; replace?: string; count?: number; edits?: { blockId: string; blockRevision: string; before: string; after: string; count: number }[]; sessionId: string; explanation: string
   status: string; stale: boolean; createdAt: number
-  blockId?: string; blockType?: string; blockRevision?: string; before?: string; after?: string
+  blockId?: string; blockType?: string; blockLanguage?: string | null; blockRevision?: string; before?: string; after?: string
   anchorBlockId?: string; placement?: 'before' | 'after'; markdown?: string
   insertedIds?: string[]; feedback?: string
 }

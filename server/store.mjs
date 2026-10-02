@@ -14,6 +14,8 @@ export function blocksOf(doc) {
       blocks.push({ id: node.attrs.id, type: node.type, level: node.attrs.level, text: inlineMarkdown(node), plain, revision: hash(node), topLevelId })
     } else if (node.type === 'table' && node.attrs?.id) {
       blocks.push({ id: node.attrs.id, type: 'table', text: tableMarkdown(node), revision: hash(node), plain: tableIsPlain(node), topLevelId, rows: tableRows(node).length })
+    } else if (node.type === 'codeBlock' && node.attrs?.id) {
+      blocks.push({ id: node.attrs.id, type: 'codeBlock', language: node.attrs.language ?? null, text: textOf(node), revision: hash(node), plain: true, topLevelId })
     }
     for (const child of node.content ?? []) walk(child, topLevelId ?? child.attrs?.id)
   }
@@ -45,7 +47,7 @@ export function parseTableMarkdown(markdown) {
   const width = Math.max(...rows.map(r => r.length))
   return rows.map(r => Array.from({ length: width }, (_, i) => r[i] ?? ''))
 }
-export function blockText(node) { return node.type === 'table' ? tableMarkdown(node) : TEXT_BLOCKS.includes(node.type) ? inlineMarkdown(node) : textOf(node) }
+export function blockText(node) { return node.type === 'table' ? tableMarkdown(node) : node.type === 'codeBlock' ? textOf(node) : TEXT_BLOCKS.includes(node.type) ? inlineMarkdown(node) : textOf(node) }
 // Inline Markdown for a paragraph or heading: what the agent reads as `before` and writes as `after`.
 const MARK_WRAP = { bold: '**', italic: '*', strike: '~~', code: '`' }
 export function inlineMarkdown(node) {
@@ -246,10 +248,10 @@ export class Store {
       if (!block || !this.inScope(job, block)) throw new Error('Target outside job scope')
       if (block.type === 'table' && !block.plain) throw new Error('This table has formatted or nested cells; propose an insert with a new table instead.')
       if (input.before !== block.text || input.blockRevision !== block.revision) throw new Error('Proposal must match the job snapshot: use before and blockRevision from claim_job.')
-      if (block.type === 'table') parseTableMarkdown(input.after); else validateText(input.after)
+      if (block.type === 'table') parseTableMarkdown(input.after); else if (block.type !== 'codeBlock') validateText(input.after)
       if (typeof input.after !== 'string' || input.after.length > 50000) throw new Error('Replacement must be under 50,000 characters')
       if (input.after === block.text) throw new Error('Proposal is identical to the current text')
-      const proposal = { ...base, blockId: block.id, blockType: block.type, blockRevision: block.revision, before: block.text, after: input.after }
+      const proposal = { ...base, blockId: block.id, blockType: block.type, blockLanguage: block.language, blockRevision: block.revision, before: block.text, after: input.after }
       this.state.proposals.push(proposal)
       return proposal
     }
@@ -417,6 +419,11 @@ export class Store {
       proposal.status = 'accepted'
       proposal.reviewedAt = Date.now()
       return { proposal, document: this.state.document, node: rebuilt }
+    } else if (proposal.blockType === 'codeBlock' && (typeof options.text === 'string' ? options.text : proposal.after).trim()) {
+      const text = typeof options.text === 'string' ? options.text : proposal.after
+      const node = findNode(doc, proposal.blockId)
+      node.content = [{ type: 'text', text }]
+      proposal.finalText = text
     } else {
       const text = typeof options.text === 'string' ? options.text : proposal.after
       if (proposal.blockType !== 'table') validateText(text)

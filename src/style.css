@@ -200,6 +200,7 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 /* Code blocks and Mermaid diagrams */
 .code-block { position: relative; margin: 8px 0 18px }
 .code-block-head { position: absolute; top: 6px; right: 8px; z-index: 1; display: flex; align-items: center; gap: 8px }
+.diagram-tuning { display: inline-flex; gap: 4px } .diagram-tuning select { width: auto; font-size: 10px; padding: 2px 4px; border-color: transparent; background: transparent; color: var(--ui-text-tertiary) } .code-block:hover .diagram-tuning select, .diagram-tuning select:focus { border-color: var(--ui-border); background: #fff }
 .code-tabs { display: inline-flex; background: #fff; border: 1px solid var(--ui-border); border-radius: 6px; padding: 2px } .code-tabs button { font-size: 10.5px; padding: 1px 9px; min-height: 20px; border-radius: 4px; color: var(--ui-text-secondary) } .code-tabs button.on { background: var(--ui-brand-soft); color: var(--ui-brand-contrast) } .code-block-head select { width: auto; font-size: 10px; padding: 2px 6px; border-color: transparent; background: transparent; color: var(--ui-text-tertiary) } .code-block:hover .code-block-head select, .code-block-head select:focus { border-color: var(--ui-border); background: #fff }
 .code-block-source { margin: 0 } .mermaid-block .code-block-source { border-bottom-left-radius: 0; border-bottom-right-radius: 0; font-size: 12px }
 .mermaid-preview { border: 1px solid var(--ui-border); border-radius: 8px; padding: 40px 24px 24px; background: #fff; display: flex; justify-content: center; overflow: auto; min-height: 120px }
@@ -239,3 +240,7 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 .mermaid-modal { border: 0; border-radius: 12px; padding: 0; max-width: 94vw; width: 94vw; max-height: 92vh; background: #fff; box-shadow: 0 30px 80px rgba(0,0,0,.35) } .mermaid-modal::backdrop { background: rgba(28,43,52,.55); backdrop-filter: blur(2px) }
 .mermaid-modal-body { position: relative; padding: 48px 28px 28px; max-height: 92vh; overflow: auto } .mermaid-close { position: absolute; top: 12px; right: 14px }
 .mermaid-modal-svg { display: flex; justify-content: center } .mermaid-modal-svg svg { width: 100% !important; max-width: none !important; height: auto !important; min-height: 50vh }
+
+.mermaid-tools { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 4px } .mermaid-tools .mermaid-expand { position: static }
+.mermaid-ask .claude-mark { display: inline-block; width: 13px; height: 13px; background: var(--claude-mark) center/contain no-repeat }
+.code-diff { margin: 0; font: 12.5px/1.6 "Roboto Mono", monospace; background: #fff; border: 1px solid var(--ui-border); border-radius: 6px; padding: 6px 0; overflow: auto; white-space: pre } .code-line { padding: 0 10px } .code-line.del { background: var(--ui-danger-soft); color: var(--ui-danger) } .code-line.ins { background: var(--ui-success-soft); color: var(--ui-success) } .code-line .gutter { display: inline-block; width: 14px; color: var(--ui-text-tertiary) }
