@@ -8,6 +8,7 @@ export const slashCommands = [
   { command: 'h3', icon: 'H₃', label: 'Heading 3', description: 'Small section heading' },
   { command: 'quote', icon: '❞', label: 'Block quote', description: 'Set a quote apart' },
   { command: 'code', icon: '⌘', label: 'Code block', description: 'Insert formatted code' },
+  { command: 'mermaid', icon: '⟁', label: 'Diagram', description: 'Mermaid diagram with live preview' },
 ]
 export function slashChoices(text: string) { const q = text.slice(1).toLowerCase(); return slashCommands.filter(item => item.command.includes(q)) }
 

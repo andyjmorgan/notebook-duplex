@@ -7,6 +7,7 @@ import { TableKit } from '@tiptap/extension-table'
 import UniqueID from '@tiptap/extension-unique-id'
 import { Markdown } from '@tiptap/markdown'
 import Image from '@tiptap/extension-image'
+import { NotebookCodeBlock } from './editor/mermaid'
 import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model'
 import { api, apiKey as keyStore, Unauthorized } from './api'
 import type { Proposal, State } from './types'
@@ -83,7 +84,7 @@ export function App() {
   const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
 
   const editor = useEditor({
-    extensions: [StarterKit, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true }), NotebookAnnotations, TkDirectives],
+    extensions: [StarterKit.configure({ codeBlock: false }), NotebookCodeBlock, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true }), NotebookAnnotations, TkDirectives],
     content: initialMarkdown, contentType: 'markdown', editable: false,
     editorProps: {
       attributes: { 'aria-label': 'Document', spellcheck: 'true' },
@@ -318,6 +319,7 @@ export function App() {
     if (cmd === 'agent') { openCommand(); return }
     if (cmd === 'image') { const src = window.prompt('Image URL'); if (src?.trim()) editor.chain().focus().setImage({ src: src.trim() }).run(); return }
     if (cmd === 'tk') { editor.chain().focus().insertContent('[tk: ').run(); return }
+    if (cmd === 'mermaid') { editor.chain().focus().insertContent({ type: 'codeBlock', attrs: { language: 'mermaid' }, content: [{ type: 'text', text: 'flowchart LR\n  Writer --> Notebook --> Claude\n  Claude -->|suggests| Writer' }] }).run(); return }
     if (cmd === 'h1' || cmd === 'h2' || cmd === 'h3') editor.chain().focus().setHeading({ level: Number(cmd[1]) as 1 | 2 | 3 }).run()
     else runAction(editor, cmd)
   }

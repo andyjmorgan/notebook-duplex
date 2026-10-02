@@ -212,5 +212,11 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.setInputFiles('input[type=file]', { name: 'img.md', mimeType: 'text/markdown', buffer: Buffer.from('# Pictures\n\n![A dot](data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)\n\nAfter the image.\n') })
   await page.waitForSelector('.tiptap img')
   assert.equal(await page.getAttribute('.tiptap img', 'alt'), 'A dot')
+
+  // Mermaid fences render as diagrams
+  await page.setInputFiles('input[type=file]', { name: 'diagram.md', mimeType: 'text/markdown', buffer: Buffer.from('# Flow\n\n```mermaid\nflowchart LR\n  A[Write] --> B[Review]\n```\n') })
+  await page.waitForSelector('.mermaid-preview svg', { timeout: 20000 })
+  assert.ok((await page.locator('.mermaid-preview svg').innerHTML()).includes('Review'))
+  await shot('mermaid')
   assert.deepEqual(errors, [])
 })

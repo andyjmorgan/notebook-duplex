@@ -15,7 +15,7 @@ Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a sin
 - **Nothing hides off-screen.** Floating pills at the top and bottom of the page count suggestions and working agents outside the viewport and scroll you to the nearest one.
 - **Keyboard review.** With the caret in a paragraph that has a suggestion, `⌘↵` accepts it. `⌘Z` undoes any accepted change.
 - **Stale protection.** If you rewrite a paragraph after a suggestion was written, the suggestion is marked as changed and cannot be applied. Writing anywhere else leaves it alive.
-- Rich text formatting, GFM tables with row and column controls, images, slash insert menu, outline, Reading mode, Markdown import and export. Background proofreading treats a table as one unit rather than cell by cell.
+- Rich text formatting, GFM tables with row and column controls, images, Mermaid diagrams (a ```mermaid fence renders live under its source, diagram-only in Reading mode), slash insert menu, outline, Reading mode, Markdown import and export. Background proofreading treats a table as one unit rather than cell by cell.
 
 ## Connect a Claude session
 

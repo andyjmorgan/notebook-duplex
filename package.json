@@ -16,6 +16,7 @@
     "@fontsource/roboto-mono": "^5.3.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@tiptap/core": "3.31.4",
+    "@tiptap/extension-code-block": "^3.31.4",
     "@tiptap/extension-image": "^3.31.4",
     "@tiptap/extension-table": "3.31.4",
     "@tiptap/extension-unique-id": "3.31.4",
@@ -23,6 +24,7 @@
     "@tiptap/pm": "3.31.4",
     "@tiptap/react": "3.31.4",
     "@tiptap/starter-kit": "3.31.4",
+    "mermaid": "^12.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.25.0"
