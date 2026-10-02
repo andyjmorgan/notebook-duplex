@@ -69,7 +69,7 @@ button kbd { margin-left: 8px; opacity: .8 } .primary kbd { background: rgba(255
 .tiptap .has-suggestion::before { background: var(--ui-brand) } .tiptap .has-suggestion.stale::before { background: #f3b04e }
 .tiptap .agent-queued::before { background: repeating-linear-gradient(to bottom, var(--ui-border-strong) 0 6px, transparent 6px 10px) }
 .tiptap .agent-active::before { background: linear-gradient(to bottom, var(--ui-ai) var(--progress, 0%), #dfe3ff var(--progress, 0%)); box-shadow: 0 0 0 0 rgba(94,109,214,.35); animation: breathe 1.8s infinite }
-.tiptap .agent-active::after, .tiptap .agent-queued::after { content: attr(data-agent); position: absolute; right: -8px; top: -16px; font-size: 10px; color: var(--ui-ai); background: var(--ui-ai-soft); border: 1px solid #dfe3ff; border-radius: 10px; padding: 1px 8px; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: rise .25s var(--ease) }
+.tiptap .agent-active::after, .tiptap .agent-queued::after { content: "✦ " attr(data-agent); position: absolute; right: -8px; top: -16px; font-size: 10px; color: var(--ui-ai); background: var(--ui-ai-soft); border: 1px solid #dfe3ff; border-radius: 10px; padding: 1px 8px; white-space: nowrap; max-width: 60%; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: rise .25s var(--ease) }
 .tiptap .agent-queued::after { color: var(--ui-text-tertiary); background: var(--ui-background-secondary); border-color: var(--ui-border) }
 .tiptap .agent-active { background: #eef0ff; border-radius: 6px; margin-left: -10px; padding-left: 10px; margin-right: -10px; padding-right: 10px; box-shadow: inset 0 0 0 1px #dfe3ff }
 @keyframes breathe { 0%, 100% { opacity: 1 } 50% { opacity: .55 } }
@@ -153,6 +153,8 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 
 /* Inline [tk: …] directives */
 .tiptap .tk-chip { background: var(--ui-brand-soft); color: var(--ui-brand-contrast); border: 1px solid #dccdf3; border-radius: 6px; padding: 1px 6px 1px 5px; font-family: "Roboto Mono", monospace; font-size: .92em; box-decoration-break: clone; -webkit-box-decoration-break: clone; transition: background .2s, border-color .2s }
+.tiptap .tk-chip::before { content: "✦ "; color: var(--ui-brand); font-family: "Noto Sans", sans-serif; font-size: .9em }
+.tiptap .tk-chip.tk-working::before { color: var(--ui-ai) } .tiptap .tk-chip.tk-done::before { color: var(--ui-success) } .tiptap .tk-chip.tk-queued::before { color: var(--ui-text-tertiary) }
 .tiptap .tk-chip.open { border-style: dashed; background: #faf7ff }
 .tiptap .tk-chip.open::after { content: "  ] sends"; color: var(--ui-text-tertiary); font-size: 10px; font-family: "Noto Sans", sans-serif; letter-spacing: .2px }
 .tiptap .tk-chip.tk-queued { border-color: var(--ui-border-strong); background: var(--ui-background-secondary); color: var(--ui-text-secondary) }
