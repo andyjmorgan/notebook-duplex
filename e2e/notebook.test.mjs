@@ -47,6 +47,16 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await until(async () => (await page.locator('.tiptap blockquote').count()) === 0)
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
 
+  // Reject all clears every pending card without touching the text
+  await page.click('.tiptap > p:nth-of-type(2)')
+  await page.click('button.test-button')
+  await page.waitForSelector('.suggestion.insert')
+  const revisionBefore = (await request('/api/state')).data.document.revision
+  await page.click('.rail .reject-all')
+  await until(async () => (await page.locator('.suggestion').count()) === 0)
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  assert.equal((await request('/api/state')).data.document.revision, revisionBefore, 'rejecting leaves the document untouched')
+
   // Local fixture: replace + insert proposals rendered inline
   await page.click('.tiptap > p:nth-of-type(2)')
   await page.click('button.test-button')

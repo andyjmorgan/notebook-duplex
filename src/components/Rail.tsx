@@ -8,7 +8,7 @@ type Props = {
   jobs: Job[]; activity: Activity[]; proposals: Proposal[]
   mcpUrl: string; apiKey: string
   proofread: boolean; onProofread: (on: boolean) => void
-  onAsk: () => void; onDirective: () => void; onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; busy: boolean
+  onAsk: () => void; onDirective: () => void; onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; onRejectAll: () => Promise<void>; busy: boolean
   onNotify: (message: string) => void
   reading: boolean; held: HeldRequest[]; onStopReading: () => void
 }
@@ -16,7 +16,7 @@ const active = (j: Job) => ['queued', 'running', 'needs_permission'].includes(j.
 const stateVerb: Record<string, string> = { reading: 'Reading', thinking: 'Thinking', writing: 'Writing', waiting: 'Waiting on you', done: 'Finishing' }
 const statusLabel: Record<string, string> = { queued: 'Queued', needs_permission: 'Needs permission in Claude\'s terminal', abandoned: 'Abandoned' }
 
-export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onAcceptAll, busy, onNotify, reading, held, onStopReading }: Props) {
+export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onAcceptAll, onRejectAll, busy, onNotify, reading, held, onStopReading }: Props) {
   const [showKey, setShowKey] = useState(false)
   const connected = sessions.filter(s => s.connected)
   const current = connected.find(s => s.id === sessionId)
@@ -82,7 +82,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
       </section>
 
       <section className="rail-section">
-        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy || reading} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone.">Accept all {acceptable.length}</button>}<span>{pending.length}</span></span></div>
+        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy || reading} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone.">Accept all {acceptable.length}</button>}{pending.length > 1 && <button className="quiet small reject-all" disabled={busy || reading} onClick={() => void onRejectAll()} title="Dismiss every pending suggestion and comment, including stale ones.">Reject all</button>}<span>{pending.length}</span></span></div>
         {pending.length ? pending.map(p => (
           <button key={p.id} className="review-link" onClick={() => onLocate(p)}>
             <span className={`review-dot ${p.stale ? 'stale' : p.type}`} />

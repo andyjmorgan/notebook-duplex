@@ -233,7 +233,7 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 
 .update-banner { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 45; background: #232833; color: #fff; border-radius: 10px; padding: 10px 14px; font-size: 12.5px; display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.22); animation: rise .25s var(--ease) }
 
-.label-actions { display: inline-flex; align-items: center; gap: 8px } .accept-all { text-transform: none; letter-spacing: 0; color: var(--ui-primary); font-weight: 600; padding: 1px 8px; min-height: 22px }
+.label-actions { display: inline-flex; align-items: center; gap: 8px } .accept-all, .reject-all { text-transform: none; letter-spacing: 0; font-weight: 600; padding: 1px 8px; min-height: 22px } .accept-all { color: var(--ui-primary) } .reject-all { color: var(--ui-text-secondary) }
 
 /* Mermaid expand */
 .mermaid-expand { position: absolute; top: 8px; left: 8px; width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 6px; background: #fff; border: 1px solid var(--ui-border); color: var(--ui-text-secondary); font-size: 15px; line-height: 1; opacity: 0; transition: opacity .15s; box-shadow: 0 1px 2px rgba(28,43,52,.08) }

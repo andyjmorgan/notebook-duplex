@@ -523,6 +523,16 @@ export function App() {
     notify(`Accepted ${done} ${done === 1 ? 'suggestion' : 'suggestions'}${failed ? `, ${failed} could not be applied` : ''}. ⌘Z steps back through them.`)
     editor.commands.focus()
   }
+  async function rejectAll() {
+    const pending = (stateRef.current?.proposals ?? []).filter(p => p.status === 'pending')
+    if (!pending.length) return
+    let done = 0
+    for (const p of pending) { try { await api('/api/review', { id: p.id, decision: p.type === 'comment' ? 'resolve' : 'reject' }); done++ } catch {} }
+    setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => pending.some(x => x.id === p.id) ? { ...p, status: p.type === 'comment' ? 'resolved' : 'rejected' } : p) })
+    void refresh()
+    notify(`Dismissed ${done} ${done === 1 ? 'suggestion' : 'suggestions'}.`)
+    editor?.commands.focus()
+  }
   const resolve = async (proposal: Proposal) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'resolve' }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'resolved' } : p) }) })
   const reply = async (proposal: Proposal, feedback: string) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'reply', feedback }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'replied' } : p) }); notify('Reply sent.') })
   const parseMarkdown = (markdown: string): any[] => editor?.markdown?.parse(markdown)?.content ?? []
@@ -663,7 +673,7 @@ export function App() {
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>
-        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} busy={busy} onNotify={notify} reading={reading.status !== 'idle'} held={held} onStopReading={() => player.stop()} />
+        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} onRejectAll={rejectAll} busy={busy} onNotify={notify} reading={reading.status !== 'idle'} held={held} onStopReading={() => player.stop()} />
       </div>
       {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy || reading.status !== 'idle'} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />
