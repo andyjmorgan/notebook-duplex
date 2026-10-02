@@ -9,8 +9,10 @@ import UniqueID from '@tiptap/extension-unique-id'
 import { Markdown } from '@tiptap/markdown'
 import Image from '@tiptap/extension-image'
 import { NotebookCodeBlock } from './editor/mermaid'
+import { ImageMarkdown } from './editor/imageMarkdown'
 import { Fragment, type Node as PMNode, type ResolvedPos } from '@tiptap/pm/model'
 import { api, apiKey as keyStore, Unauthorized } from './api'
+import * as apiModule from './api'
 import type { Proposal, State } from './types'
 import { NotebookAnnotations, annotationsKey, hostFor, releaseHosts } from './editor/annotations'
 import { TkDirectives, directivesPluginKey, findDirectives, directiveKey, type DirectiveStatus } from './editor/directives'
@@ -60,6 +62,10 @@ export function App() {
   const [saveState, setSaveState] = useState('Opening…')
   const [connectionLabel, setConnectionLabel] = useState('Connecting')
   const [toast, setToast] = useState('')
+  const [updateReady, setUpdateReady] = useState(false)
+  const [mermaidFailed, setMermaidFailed] = useState(false)
+  useEffect(() => { const onFail = () => setMermaidFailed(true); window.addEventListener('notebook:chunk-failed', onFail); return () => window.removeEventListener('notebook:chunk-failed', onFail) }, [])
+  const buildRef = useRef<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [proofread, setProofread] = useState(false)
   const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; selection?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
@@ -86,7 +92,7 @@ export function App() {
   const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
 
   const editor = useEditor({
-    extensions: [StarterKit.configure({ codeBlock: false }), NotebookCodeBlock, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true }), NotebookAnnotations, TkDirectives],
+    extensions: [StarterKit.configure({ codeBlock: false }), NotebookCodeBlock, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true, inline: true }), ImageMarkdown, NotebookAnnotations, TkDirectives],
     content: initialMarkdown, contentType: 'markdown', editable: false,
     editorProps: {
       attributes: { 'aria-label': 'Document', spellcheck: 'true' },
@@ -232,6 +238,9 @@ export function App() {
       try {
         const next = await api<State>('/api/state?lite=1')
         if (!cancelled) setState(prev => ({ ...next, document: { ...next.document, json: prev?.document.json ?? null, markdown: prev?.document.markdown ?? '' } }))
+        const lastBuild = apiModule.lastBuild
+        if (!cancelled && lastBuild && buildRef.current && lastBuild !== buildRef.current) setUpdateReady(true)
+        if (!cancelled && lastBuild && !buildRef.current) buildRef.current = lastBuild
       } catch (e) {
         if (e instanceof Unauthorized) { setAuthed(false); return }
         setConnectionLabel('Reconnecting…')
@@ -578,6 +587,7 @@ export function App() {
       {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />
       {slashOpen && slashPosition && <SlashMenu query={view!.slashText} index={slashIndex} position={slashPosition} onPick={executeSlash} />}
+      {(updateReady || mermaidFailed) && <div className="update-banner" role="status">Notebook Duplex was updated while this tab was open{mermaidFailed ? ', so diagrams cannot load' : ''}. <button className="primary small" onClick={async () => { try { await flush() } catch {} location.reload() }}>Reload</button></div>}
       <div id="toast" role="status" aria-live="polite" className={toast ? 'visible' : ''}>{toast}</div>
     </>
   )

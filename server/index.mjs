@@ -47,7 +47,7 @@ function authorized(req) {
   const given = Buffer.from(header.startsWith('Bearer ') ? header.slice(7) : '')
   return given.length === keyBuffer.length && timingSafeEqual(given, keyBuffer)
 }
-function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)) }
+function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Build': buildId }); res.end(JSON.stringify(data)) }
 function readBody(req) {
   return new Promise((ok, fail) => { let body = ''; req.on('data', c => { body += c; if (body.length > 4_000_000) { req.destroy(); fail(new Error('Body too large')) } }); req.on('end', () => ok(body)); req.on('error', fail) })
 }
@@ -171,6 +171,8 @@ function publicUrl(req) {
   return `${proto}://${req.headers['x-forwarded-host'] ?? req.headers.host}`
 }
 
+let buildId = 'dev'
+try { buildId = (await readFile(join(distDir, 'index.html'), 'utf8')).match(/assets\/index-([A-Za-z0-9_-]+)\.js/)?.[1] ?? 'dev' } catch {}
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.woff': 'font/woff', '.json': 'application/json', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' }
 async function serveStatic(res, path) {
   if (!existsSync(distDir)) { res.writeHead(503, { 'Content-Type': 'text/plain' }); return res.end('Run npm run build, or use the Vite dev server.') }

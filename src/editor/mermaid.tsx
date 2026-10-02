@@ -34,7 +34,9 @@ export function MermaidPreview({ source }: { source: string }) {
         const result = await mermaid.render(id.current + '-' + Date.now().toString(36), source)
         if (!cancelled) { setSvg(result.svg); setError('') }
       } catch (e) {
-        if (!cancelled) setError((e as Error).message.split('\n')[0] || 'Diagram could not be rendered')
+        const message = (e as Error).message ?? ''
+        if (/dynamically imported module|Failed to fetch|Loading chunk|import\(/i.test(message)) window.dispatchEvent(new Event('notebook:chunk-failed'))
+        if (!cancelled) setError(message.split('\n')[0] || 'Diagram could not be rendered')
         document.getElementById('d' + id.current)?.remove()
       }
     }, 350)

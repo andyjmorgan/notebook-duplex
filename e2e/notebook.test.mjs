@@ -268,8 +268,8 @@ test('writer and agent collaborate end to end in the browser', async t => {
   // Images parse from Markdown
   await page.evaluate(() => { const w = window; w.confirm = () => true })
   await page.setInputFiles('input[type=file]', { name: 'img.md', mimeType: 'text/markdown', buffer: Buffer.from('# Pictures\n\n![A dot](data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)\n\nAfter the image.\n') })
-  await page.waitForSelector('.tiptap img')
-  assert.equal(await page.getAttribute('.tiptap img', 'alt'), 'A dot')
+  await page.waitForSelector('.tiptap img:not(.ProseMirror-separator)')
+  assert.equal(await page.getAttribute('.tiptap img:not(.ProseMirror-separator)', 'alt'), 'A dot')
 
   // Pasting Markdown that contains an image renders the image
   await page.click('.tiptap > p:nth-of-type(1)'); await page.waitForTimeout(80); await page.keyboard.press('Control+End'); await page.keyboard.press('Enter')

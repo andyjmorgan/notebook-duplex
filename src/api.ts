@@ -4,8 +4,10 @@ export const apiKey = {
   get: () => { try { return localStorage.getItem(KEY) ?? '' } catch { return '' } },
   set: (value: string) => { try { if (value) localStorage.setItem(KEY, value); else localStorage.removeItem(KEY) } catch {} },
 }
+export let lastBuild = ''
 export async function api<T = any>(path: string, data?: unknown, key = apiKey.get()): Promise<T> {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) })
+  const build = response.headers.get('x-build'); if (build) lastBuild = build
   if (response.status === 401) throw new Unauthorized()
   const result = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(result.error ?? 'Request failed')
