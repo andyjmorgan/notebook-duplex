@@ -150,3 +150,44 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 @media (max-width: 1280px) { .workspace { grid-template-columns: 160px minmax(0,1fr) 300px } .writing { padding: 26px } .page { padding: 24px 28px 60px } .command-bar { margin: 0 28px } }
 @media (max-width: 1060px) { .workspace { grid-template-columns: minmax(0,1fr) 290px } .outline { display: none } .appbar { padding: 0 16px } .document-footer span:nth-child(2) { display: none } }
 @media (max-width: 820px) { .workspace { grid-template-columns: minmax(0,1fr) } .rail { position: static; height: auto; border-left: 0; border-top: 1px solid var(--ui-border) } .writing { padding: 18px 14px } .page { padding: 18px 20px 50px } .command-bar { margin: 0 12px } .tiptap .agent-active::after { display: none } }
+
+/* Inline [tk: …] directives */
+.tiptap .tk-chip { background: var(--ui-brand-soft); color: var(--ui-brand-contrast); border: 1px solid #dccdf3; border-radius: 6px; padding: 1px 6px 1px 5px; font-family: "Roboto Mono", monospace; font-size: .92em; box-decoration-break: clone; -webkit-box-decoration-break: clone; transition: background .2s, border-color .2s }
+.tiptap .tk-chip.open { border-style: dashed; background: #faf7ff }
+.tiptap .tk-chip.open::after { content: "  ] sends"; color: var(--ui-text-tertiary); font-size: 10px; font-family: "Noto Sans", sans-serif; letter-spacing: .2px }
+.tiptap .tk-chip.tk-queued { border-color: var(--ui-border-strong); background: var(--ui-background-secondary); color: var(--ui-text-secondary) }
+.tiptap .tk-chip.tk-working { background: linear-gradient(90deg, #eef0ff, #f8f5ff, #eef0ff); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; border-color: #cfd4ff; color: var(--ui-ai) }
+.tiptap .tk-chip.tk-done { background: var(--ui-success-soft); border-color: #cde6d4; color: var(--ui-success); text-decoration: line-through; text-decoration-color: rgba(42,126,65,.4) }
+.tiptap .tk-chip.tk-failed { background: var(--ui-warning-soft); border-color: #f1dcb8; color: var(--ui-warning) }
+@keyframes shimmer { from { background-position: 200% 0 } to { background-position: 0 0 } }
+
+/* Agent presence on whole tables */
+.tiptap .tableWrapper { position: relative }
+.tiptap .tableWrapper.agent-active { margin-left: -10px; padding-left: 10px; margin-right: -10px; padding-right: 10px; border-radius: 6px }
+.tiptap .tableWrapper.agent-active::after, .tiptap .tableWrapper.agent-queued::after { top: -4px }
+.tiptap .agent-active-cell { background: rgba(240,242,255,.7) }
+.tiptap .has-suggestion-cell { box-shadow: inset 3px 0 0 var(--ui-brand) }
+
+/* Off-screen approval markers */
+.offscreen { position: fixed; z-index: 18; transform: translateX(-50%); pointer-events: none; display: flex; justify-content: center }
+.offscreen-top { top: 112px } .offscreen-bottom { bottom: 22px }
+.offscreen-pill { pointer-events: auto; font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 999px; color: #fff; background: var(--ui-brand); border: 0; box-shadow: 0 6px 20px rgba(99,44,166,.35), 0 1px 2px rgba(0,0,0,.15); animation: rise .25s var(--ease); white-space: nowrap }
+.offscreen-pill:hover { background: var(--ui-brand-contrast) } .offscreen-pill.working { background: var(--ui-ai); box-shadow: 0 6px 20px rgba(94,109,214,.35) } .offscreen-pill.working:hover { background: #4d5bc4 }
+
+/* Context menu */
+.context-menu { position: fixed; z-index: 35; min-width: 220px; background: #fff; border: 1px solid var(--ui-border); border-radius: 8px; box-shadow: 0 10px 30px rgba(28,43,52,.16); padding: 4px; animation: rise .12s var(--ease) }
+.menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font-size: 12.5px; padding: 7px 10px; border-radius: 6px; min-height: 30px }
+.menu-item:hover:not(:disabled) { background: var(--ui-brand-soft); color: var(--ui-brand-contrast) } .menu-item kbd { margin-left: auto } .menu-icon { width: 16px; text-align: center; color: var(--ui-text-tertiary); font-weight: 600 } .menu-item:hover:not(:disabled) .menu-icon { color: inherit }
+.menu-separator { height: 1px; background: var(--ui-border); margin: 4px 6px }
+
+/* Command bar selection chip, images */
+.command-selection { margin: 6px 0 0 26px; font-size: 12px; color: var(--ui-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap } .command-selection .eyebrow { margin-right: 6px }
+.tiptap img { max-width: 100%; height: auto; border-radius: 6px; display: block; margin: 8px 0 18px } .tiptap img.ProseMirror-selectednode { outline: 2px solid var(--ui-primary); outline-offset: 2px }
+
+/* Table diff cards */
+.table-diff-wrap { overflow: auto; border: 1px solid var(--ui-border); border-radius: 6px; background: #fff }
+.table-diff { border-collapse: collapse; width: 100%; font-size: 12.5px; font-family: "Roboto Mono", monospace }
+.table-diff th, .table-diff td { border: 1px solid var(--ui-border); padding: 6px 9px; vertical-align: top; text-align: left } .table-diff th { background: var(--ui-background-secondary); font-weight: 600 }
+.table-diff .diff-line { font-size: inherit; line-height: 1.5 }
+.table-diff .cell-changed { background: #fffdf4 } .table-diff .cell-ins, .table-diff .row-ins td, .table-diff .row-ins th { background: var(--ui-success-soft) } .table-diff .cell-del, .table-diff .row-del td, .table-diff .row-del th { background: var(--ui-danger-soft) }
+.table-diff del { color: var(--ui-danger); text-decoration: line-through } .table-diff ins { color: var(--ui-success); text-decoration: none; font-weight: 600 }

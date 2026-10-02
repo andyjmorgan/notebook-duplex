@@ -44,6 +44,18 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   for (const p of proposals) if (p.type === 'replace' && p.blockId) mark(p.blockId, p.stale ? 'has-suggestion stale' : 'has-suggestion')
 
   const topLevel = topLevelPositions(doc)
+  // Blocks inside a table: lift agent presence onto the table itself, keep the cells quiet.
+  const tableOf = new Map<string, PMNode>()
+  doc.forEach(top => { if (top.type.name === 'table') top.descendants(n => { if (n.attrs?.id) tableOf.set(n.attrs.id, top) }) })
+  for (const [id, entry] of [...nodeClasses]) {
+    const table = tableOf.get(id)
+    if (!table?.attrs?.id) continue
+    const lifted = nodeClasses.get(table.attrs.id) ?? { classes: new Set(), attrs: {} }
+    for (const c of entry.classes) lifted.classes.add(c)
+    Object.assign(lifted.attrs, entry.attrs)
+    nodeClasses.set(table.attrs.id, lifted)
+    nodeClasses.set(id, { classes: new Set([...entry.classes].map(c => c + '-cell')), attrs: {} })
+  }
   doc.descendants((node, pos) => {
     const id = node.attrs?.id
     if (!id || !nodeClasses.has(id)) return
@@ -53,7 +65,9 @@ export function buildDecorations(doc: PMNode, { proposals, activity, queued, ses
   for (const p of proposals) {
     let at: number | undefined
     if (p.type === 'replace' && p.blockId) {
-      doc.descendants((node, pos) => { if (node.attrs?.id === p.blockId) { at = pos + node.nodeSize; return false } return at === undefined })
+      const table = tableOf.get(p.blockId)
+      if (table?.attrs?.id && topLevel.has(table.attrs.id)) { const t = topLevel.get(table.attrs.id)!; at = t.pos + t.node.nodeSize }
+      else doc.descendants((node, pos) => { if (node.attrs?.id === p.blockId) { at = pos + node.nodeSize; return false } return at === undefined })
     } else if (p.type === 'insert' && p.anchorBlockId) {
       const anchor = topLevel.get(p.anchorBlockId)
       if (anchor) at = p.placement === 'before' ? anchor.pos : anchor.pos + anchor.node.nodeSize

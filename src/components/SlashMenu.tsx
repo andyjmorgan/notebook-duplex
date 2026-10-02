@@ -1,6 +1,8 @@
 export const slashCommands = [
   { command: 'agent', icon: '✦', label: 'Ask agent', description: 'Send a task to your Claude session' },
   { command: 'table', icon: '▦', label: 'Table', description: 'Insert a text table' },
+  { command: 'image', icon: '▣', label: 'Image', description: 'Insert an image from a URL' },
+  { command: 'tk', icon: '⌁', label: 'Directive', description: 'Leave a [tk: …] note that fires when you close it' },
   { command: 'h1', icon: 'H₁', label: 'Heading 1', description: 'Large section heading' },
   { command: 'h2', icon: 'H₂', label: 'Heading 2', description: 'Section heading' },
   { command: 'h3', icon: 'H₃', label: 'Heading 3', description: 'Small section heading' },

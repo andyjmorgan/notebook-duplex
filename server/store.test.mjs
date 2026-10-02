@@ -131,3 +131,30 @@ test('job snapshots remain immutable through accepted edits', () => {
   assert.equal(job.snapshot.blocks[0].text, 'Original')
   assert.equal(job.snapshot.json.content[0].content[0].text, 'Original')
 })
+test('tables are blocks: markdown round-trips, replace rebuilds rows and cells with ids', () => {
+  const store = new Store()
+  const table = { type: 'table', attrs: { id: 't' }, content: [
+    { type: 'tableRow', attrs: { id: 'r1' }, content: [{ type: 'tableHeader', attrs: { id: 'h1' }, content: [{ type: 'paragraph', attrs: { id: 'hp1' }, content: [{ type: 'text', text: 'Idea' }] }] }, { type: 'tableHeader', attrs: { id: 'h2' }, content: [{ type: 'paragraph', attrs: { id: 'hp2' }, content: [{ type: 'text', text: 'Next' }] }] }] },
+    { type: 'tableRow', attrs: { id: 'r2' }, content: [{ type: 'tableCell', attrs: { id: 'c1' }, content: [{ type: 'paragraph', attrs: { id: 'cp1' }, content: [{ type: 'text', text: 'Write' }] }] }, { type: 'tableCell', attrs: { id: 'c2' }, content: [{ type: 'paragraph', attrs: { id: 'cp2' }, content: [{ type: 'text', text: 'Edit' }] }] }] },
+  ] }
+  store.sync({ json: { type: 'doc', content: [table, { type: 'paragraph', attrs: { id: 'after' }, content: [{ type: 'text', text: 'Tail' }] }] }, expectedRevision: 0 })
+  const block = store.snapshot().blocks.find(b => b.id === 't')
+  assert.equal(block.type, 'table')
+  assert.equal(block.text, '| Idea | Next |\n| --- | --- |\n| Write | Edit |')
+  assert.equal(block.plain, true)
+  const job = store.enqueue({ instruction: 'Fix table', sessionId: 's', blockIds: ['t'] }); store.claim(job.id, 's')
+  assert.throws(() => store.propose({ jobId: job.id, blockId: 't', blockRevision: block.revision, before: block.text, after: 'not a table' }, 's'))
+  const proposal = store.propose({ jobId: job.id, blockId: 't', blockRevision: block.revision, before: block.text, after: '| Idea | Next step | Owner |\n| --- | --- | --- |\n| Write freely | Edit later | You |\n| Review | Accept | Claude |', explanation: 'adds a column and a row' }, 's')
+  assert.equal(proposal.blockType, 'table')
+  const result = store.review(proposal.id, 'accept')
+  const rebuilt = result.document.json.content[0]
+  assert.equal(rebuilt.attrs.id, 't')
+  assert.equal(rebuilt.content.length, 3)
+  assert.equal(rebuilt.content[0].content[0].type, 'tableHeader')
+  assert.equal(rebuilt.content[0].content[2].content[0].content[0].text, 'Owner')
+  assert.equal(rebuilt.content[0].content[0].attrs.id, 'h1', 'existing cells keep their ids')
+  assert.ok(rebuilt.content[2].attrs.id && rebuilt.content[2].attrs.id !== 'r2', 'new rows get fresh ids')
+  assert.equal(result.node.attrs.id, 't')
+  assert.equal(store.snapshot().blocks.find(b => b.id === 't').text.split('\n').length, 4)
+  assert.equal(result.document.json.content[1].content[0].text, 'Tail')
+})

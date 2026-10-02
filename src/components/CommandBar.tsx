@@ -5,6 +5,7 @@ type Props = {
   open: boolean
   anchor: { top: number; left: number } | null
   initial: string
+  selection?: string
   scopeLabel: string
   sessions: Session[]
   sessionId: string
@@ -13,7 +14,7 @@ type Props = {
   onClose: () => void
 }
 
-export function CommandBar({ open, anchor, initial, scopeLabel, sessions, sessionId, onSessionChange, onSubmit, onClose }: Props) {
+export function CommandBar({ open, anchor, initial, selection, scopeLabel, sessions, sessionId, onSessionChange, onSubmit, onClose }: Props) {
   const [text, setText] = useState(initial)
   const [whole, setWhole] = useState(false)
   const [error, setError] = useState('')
@@ -35,6 +36,7 @@ export function CommandBar({ open, anchor, initial, scopeLabel, sessions, sessio
         <textarea ref={input} autoFocus value={text} rows={1} placeholder={connected.length ? 'Ask for a rewrite, a source, a counter-argument…' : 'Connect a Claude session to send commands'} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} aria-label="Command for the agent" />
         <button className="primary small" onClick={() => void send()} disabled={!text.trim() || !connected.length || sending}>{sending ? 'Sending…' : 'Send'}<kbd>↵</kbd></button>
       </div>
+      {selection && <div className="command-selection" title={selection}><span className="eyebrow">SELECTION</span> “{selection.length > 140 ? selection.slice(0, 140) + '…' : selection}”</div>}
       <div className="command-meta">
         <div className="scope-toggle" role="radiogroup" aria-label="Scope">
           <button role="radio" aria-checked={!whole} className={!whole ? 'on' : ''} onClick={() => setWhole(false)}>{scopeLabel}</button>

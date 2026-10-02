@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Proposal, Session } from '../types'
-import { DiffView } from './DiffView'
+import { DiffView, TableDiff } from './DiffView'
 
 type Props = {
   proposal: Proposal
@@ -21,7 +21,7 @@ export function SuggestionCard({ proposal, session, busy, onAccept, onReject, on
   const edited = proposal.type === 'insert' ? draft !== (proposal.markdown ?? '') : draft !== (proposal.after ?? '')
   const run = (fn: () => Promise<void>) => fn().catch(e => setError(e.message))
   const who = session?.name ?? 'Claude'
-  const kind = proposal.stale ? 'Paragraph changed' : proposal.type === 'insert' ? 'Suggested addition' : 'Suggested edit'
+  const kind = proposal.stale ? (proposal.blockType === 'table' ? 'Table changed' : 'Paragraph changed') : proposal.type === 'insert' ? 'Suggested addition' : proposal.blockType === 'table' ? 'Suggested table edit' : 'Suggested edit'
 
   return (
     <aside className={`suggestion ${proposal.type} ${proposal.stale ? 'stale' : ''}`} aria-label={kind} onKeyDown={e => { if (e.key === 'Escape' && mode !== 'view') { e.stopPropagation(); setMode('view') } }}>
@@ -33,6 +33,8 @@ export function SuggestionCard({ proposal, session, busy, onAccept, onReject, on
         <p className="suggestion-text">You changed this part of the document after the suggestion was written, so it no longer applies.</p>
       ) : mode === 'edit' || (proposal.type === 'insert' && mode === 'view') ? (
         <textarea ref={textarea} className="suggestion-editor" value={draft} rows={Math.min(14, Math.max(2, draft.split('\n').length + 1))} onChange={e => setDraft(e.target.value)} aria-label="Proposed text" spellCheck />
+      ) : proposal.blockType === 'table' ? (
+        <TableDiff before={proposal.before ?? ''} after={proposal.after ?? ''} />
       ) : (
         <DiffView before={proposal.before ?? ''} after={proposal.after ?? ''} />
       )}

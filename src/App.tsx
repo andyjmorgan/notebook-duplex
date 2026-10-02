@@ -1,14 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type React from 'react'
 import { createPortal } from 'react-dom'
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { TableKit } from '@tiptap/extension-table'
 import UniqueID from '@tiptap/extension-unique-id'
 import { Markdown } from '@tiptap/markdown'
+import Image from '@tiptap/extension-image'
 import { Fragment, type ResolvedPos } from '@tiptap/pm/model'
 import { api, apiKey as keyStore, Unauthorized } from './api'
 import type { Proposal, State } from './types'
 import { NotebookAnnotations, annotationsKey, hostFor, releaseHosts } from './editor/annotations'
+import { TkDirectives, directivesPluginKey, findDirectives, directiveKey, type DirectiveStatus } from './editor/directives'
+import { OffscreenMarkers, type Marker } from './components/OffscreenMarkers'
+import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { SuggestionCard } from './components/SuggestionCard'
 import { CommandBar } from './components/CommandBar'
 import { SlashMenu, slashChoices } from './components/SlashMenu'
@@ -38,7 +43,8 @@ Use the local test suggestion to try the review flow without connecting Claude. 
 
 [tk: Find a primary source about local-first software.]
 `
-const idTypes = ['paragraph', 'heading', 'table', 'tableRow', 'tableCell', 'tableHeader', 'listItem', 'blockquote', 'codeBlock', 'bulletList', 'orderedList']
+const idTypes = ['paragraph', 'heading', 'table', 'tableRow', 'tableCell', 'tableHeader', 'listItem', 'blockquote', 'codeBlock', 'bulletList', 'orderedList', 'image']
+const PROOFREAD_TABLE_INSTRUCTION = 'Proofread this table for spelling, grammar, consistency and clarity. Its cells are the blocks in scope, in reading order. Return replace proposals only for cells where a change helps; otherwise report completion. Preserve the writer’s meaning.'
 const PROOFREAD_INSTRUCTION = 'Proofread the selected paragraph for spelling, grammar, and clarity. Return a replace proposal only if a change helps; otherwise report completion. Preserve the writer’s meaning and voice.'
 
 export function App() {
@@ -54,14 +60,17 @@ export function App() {
   const [toast, setToast] = useState('')
   const [busy, setBusy] = useState(false)
   const [proofread, setProofread] = useState(false)
-  const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
+  const [command, setCommand] = useState<{ open: boolean; initial: string; scopeId?: string; selection?: string; anchor: { top: number; left: number } | null }>({ open: false, initial: '', anchor: null })
+  const [menu, setMenu] = useState<{ x: number; y: number; selection: string; blockId?: string } | null>(null)
+  const [markers, setMarkers] = useState<Marker[]>([])
+  const [tick, setTick] = useState(0)
   const [slashIndex, setSlashIndex] = useState(0)
-  const [, setTick] = useState(0)
 
   const ready = useRef(false), dirty = useRef(false), syncing = useRef(false), revision = useRef(0), lastEdit = useRef(0)
   const syncChain = useRef<Promise<void>>(Promise.resolve())
   const pendingSync = useRef<ReturnType<typeof setTimeout>>(undefined)
   const proofreadSeen = useRef(new Map<string, string>())
+  const firedDirectives = useRef(new Set<string>())
   const slashRef = useRef({ open: false, index: 0 })
   const stateRef = useRef<State>(undefined)
   const pageRef = useRef<HTMLDivElement>(null)
@@ -69,12 +78,12 @@ export function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   stateRef.current = state
   // Editor key handlers are created once; they reach the latest render through this ref.
-  const live = useRef({ openCommand: (_initial?: string) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined })
+  const live = useRef({ openCommand: (_initial?: string, _selection?: string) => {}, executeSlash: (_cmd?: string) => {}, accept: async (_p: Proposal, _edited: string) => {}, currentBlockId: (): string | undefined => undefined, currentBlockChain: (): string[] => [], onUpdate: () => {} })
 
   const notify = useCallback((message: string) => { setToast(message); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200) }, [])
 
   const editor = useEditor({
-    extensions: [StarterKit, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, NotebookAnnotations],
+    extensions: [StarterKit, TableKit.configure({ table: { resizable: false } }), UniqueID.configure({ types: idTypes }), Markdown, Image.configure({ allowBase64: true }), NotebookAnnotations, TkDirectives],
     content: initialMarkdown, contentType: 'markdown', editable: false,
     editorProps: {
       attributes: { 'aria-label': 'Document', spellcheck: 'true' },
@@ -95,14 +104,14 @@ export function App() {
         }
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); live.current.openCommand(); return true }
         if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-          const id = live.current.currentBlockId()
-          const p = stateRef.current?.proposals.find(x => x.status === 'pending' && !x.stale && x.type === 'replace' && x.blockId === id)
+          const ids = live.current.currentBlockChain()
+          const p = stateRef.current?.proposals.find(x => x.status === 'pending' && !x.stale && x.type === 'replace' && ids.includes(x.blockId ?? ''))
           if (p) { event.preventDefault(); void live.current.accept(p, p.after ?? ''); return true }
         }
         return false
       },
     },
-    onUpdate() { if (!ready.current) return; dirty.current = true; lastEdit.current = Date.now(); queueSync() },
+    onUpdate() { if (!ready.current) return; dirty.current = true; lastEdit.current = Date.now(); queueSync(); live.current.onUpdate() },
   })
 
   const view = useEditorState({
@@ -144,6 +153,14 @@ export function App() {
     } catch {}
     return textBlockAt(editor.state.selection.$from)
   }
+  function currentBlockChain(): string[] {
+    if (!editor) return []
+    const ids: string[] = []
+    const $from = editor.state.selection.$from
+    for (let depth = $from.depth; depth >= 0; depth--) { const node = $from.node(depth); if (node.attrs?.id) ids.push(node.attrs.id) }
+    const first = currentBlockId(); if (first && !ids.includes(first)) ids.unshift(first)
+    return ids
+  }
   function blockPosition(id: string) {
     let found: { pos: number; size: number } | undefined
     editor?.state.doc.descendants((node, pos) => { if (!found && node.attrs?.id === id) found = { pos, size: node.nodeSize }; return !found })
@@ -177,6 +194,7 @@ export function App() {
     const fresh = await api<State>('/api/state')
     revision.current = fresh.document.revision
     if (fresh.document.json) editor.commands.setContent(fresh.document.json, { emitUpdate: false })
+    for (const d of findDirectives(editor.state.doc)) if (d.complete) firedDirectives.current.add(directiveKey(d))
     dirty.current = false; setSaveState('Saved')
     setState(fresh)
   }
@@ -203,6 +221,7 @@ export function App() {
         const initial = await api<State>('/api/state')
         revision.current = initial.document.revision
         if (initial.document.json) editor.commands.setContent(initial.document.json, { emitUpdate: false })
+        for (const d of findDirectives(editor.state.doc)) if (d.complete) firedDirectives.current.add(directiveKey(d))
         if (titleRef.current) titleRef.current.value = initial.document.title === 'Untitled' ? 'Working notes' : initial.document.title
         setAuthed(true); ready.current = true; dirty.current = true
         editor.setEditable(true)
@@ -224,8 +243,12 @@ export function App() {
     if (!editor || !state) return
     const proposals = state.proposals.filter(p => p.status === 'pending')
     const queued = state.jobs.filter(j => j.status === 'queued')
-    editor.view.dispatch(editor.state.tr.setMeta(annotationsKey, { proposals, activity: state.activity, queued, sessions: state.sessions }).setMeta('addToHistory', false))
+    const directiveStatus: DirectiveStatus = new Map()
+    for (const j of state.jobs) if (j.directive && j.blockIds[0]) directiveStatus.set(`${j.blockIds[0]}|${j.directive}`, j.status === 'queued' ? 'queued' : ['running', 'needs_permission'].includes(j.status) ? 'working' : j.status === 'completed' ? 'done' : 'failed')
+    editor.view.dispatch(editor.state.tr.setMeta(annotationsKey, { proposals, activity: state.activity, queued, sessions: state.sessions }).setMeta(directivesPluginKey, directiveStatus).setMeta('addToHistory', false))
     releaseHosts(new Set(proposals.map(p => p.id)))
+    const working = [...editor.view.dom.querySelectorAll<HTMLElement>('.agent-active')].map((element, i) => ({ id: 'w' + i, kind: 'working' as const, element }))
+    setMarkers([...proposals.map(p => ({ id: p.id, kind: 'review' as const, element: hostFor(p.id) })), ...working])
     setTick(t => t + 1)
     const connected = state.sessions.filter(s => s.connected)
     if (!connected.some(s => s.id === sessionId)) setSessionId(connected[0]?.id ?? '')
@@ -242,19 +265,27 @@ export function App() {
       const s = stateRef.current
       if (!ready.current || busy || dirty.current || syncing.current || Date.now() - lastEdit.current < 2500 || !sessionId || !s) return
       if (s.jobs.some(j => j.kind === 'proofread' && ['queued', 'running'].includes(j.status))) return
-      const blocks: { id: string; text: string }[] = []
-      editor.state.doc.descendants(node => { if (node.type.name === 'paragraph' && node.attrs.id && node.content.content.every(n => n.isText && !n.marks.length)) { const text = node.textContent; if (text.trim().length > 20 && !text.startsWith('[tk:')) blocks.push({ id: node.attrs.id, text }) } })
-      const block = blocks.find(b => proofreadSeen.current.get(b.id) !== b.text)
-      if (!block) return
-      try { await api('/api/jobs', { instruction: PROOFREAD_INSTRUCTION, blockIds: [block.id], sessionId, kind: 'proofread' }); proofreadSeen.current.set(block.id, block.text) } catch {}
+      const units: { key: string; text: string; blockIds: string[]; table: boolean }[] = []
+      editor.state.doc.forEach(top => {
+        if (top.type.name === 'table' && top.attrs.id) {
+          const ids: string[] = []; let text = ''
+          top.descendants(n => { if (n.type.name === 'paragraph' && n.attrs.id && n.content.content.every(c => c.isText && !c.marks.length)) { ids.push(n.attrs.id); text += n.textContent + '\n' } })
+          if (ids.length && text.trim().length > 20) units.push({ key: top.attrs.id, text, blockIds: [top.attrs.id, ...ids], table: true })
+        } else top.descendants(n => { if (n.type.name === 'paragraph' && n.attrs.id && n.content.content.every(c => c.isText && !c.marks.length)) { const text = n.textContent; if (text.trim().length > 20 && !/\[tk:/.test(text)) units.push({ key: n.attrs.id, text, blockIds: [n.attrs.id], table: false }) } })
+      })
+      const unit = units.find(u => proofreadSeen.current.get(u.key) !== u.text)
+      if (!unit) return
+      try { await api('/api/jobs', { instruction: unit.table ? PROOFREAD_TABLE_INSTRUCTION : PROOFREAD_INSTRUCTION, blockIds: unit.blockIds, sessionId, kind: 'proofread', context: unit.table ? { table: true } : undefined }); proofreadSeen.current.set(unit.key, unit.text) } catch {}
     }, 2500)
     return () => clearInterval(timer)
   }, [proofread, editor, sessionId, busy])
 
-  function openCommand(initial = '') {
+  function openCommand(initial = '', selection?: string) {
     if (!editor || !ready.current) return
     if (mode !== 'editing') { notify('Switch to Editing to ask the agent.'); return }
     const scopeId = currentBlockId()
+    const { from, to } = editor.state.selection
+    selection ??= from !== to ? editor.state.doc.textBetween(from, to, ' ').trim() || undefined : undefined
     const page = pageRef.current
     let anchor = { top: 0, left: 0 }
     if (page) {
@@ -263,12 +294,12 @@ export function App() {
       const coords = editor.view.coordsAtPos(pos ? pos.pos + pos.size - 1 : editor.state.selection.from)
       anchor = { top: coords.bottom - rect.top + 10, left: 0 }
     }
-    setCommand({ open: true, initial, scopeId, anchor })
+    setCommand({ open: true, initial, scopeId, selection, anchor })
   }
   function closeCommand() { setCommand(c => ({ ...c, open: false })); editor?.commands.focus() }
   async function submitCommand(instruction: string, whole: boolean) {
     await flush()
-    await api('/api/jobs', { instruction, blockIds: whole || !command.scopeId ? [] : [command.scopeId], sessionId })
+    await api('/api/jobs', { instruction, blockIds: whole || !command.scopeId ? [] : [command.scopeId], sessionId, context: command.selection ? { selection: command.selection } : undefined })
     closeCommand()
     setState(await api<State>('/api/state'))
   }
@@ -286,6 +317,8 @@ export function App() {
     editor.view.dispatch(editor.state.tr.delete(from, from + sel.$from.parent.content.size))
     slashRef.current.open = false
     if (cmd === 'agent') { openCommand(); return }
+    if (cmd === 'image') { const src = window.prompt('Image URL'); if (src?.trim()) editor.chain().focus().setImage({ src: src.trim() }).run(); return }
+    if (cmd === 'tk') { editor.chain().focus().insertContent('[tk: ').run(); return }
     if (cmd === 'h1' || cmd === 'h2' || cmd === 'h3') editor.chain().focus().setHeading({ level: Number(cmd[1]) as 1 | 2 | 3 }).run()
     else runAction(editor, cmd)
   }
@@ -316,8 +349,8 @@ export function App() {
       if (result.stale) { notify('You changed this paragraph, so the suggestion no longer applies.'); return }
       const target = blockPosition(proposal.blockId!)
       if (!target) throw new Error('Target disappeared. Reloading.')
-      const text = result.proposal.finalText ?? edited
-      editor.view.dispatch(editor.state.tr.replaceWith(target.pos + 1, target.pos + target.size - 1, text ? editor.schema.text(text) : []))
+      if (result.node) editor.view.dispatch(editor.state.tr.replaceWith(target.pos, target.pos + target.size, editor.schema.nodeFromJSON(result.node)))
+      else { const text = result.proposal.finalText ?? edited; editor.view.dispatch(editor.state.tr.replaceWith(target.pos + 1, target.pos + target.size - 1, text ? editor.schema.text(text) : [])) }
       revision.current = result.document.revision
     }
     await sync()
@@ -358,7 +391,61 @@ export function App() {
     catch (e) { setGateError(e instanceof Unauthorized ? 'That key was not accepted.' : (e as Error).message) }
   }
 
-  live.current = { openCommand, executeSlash, accept, currentBlockId }
+  function onEditorUpdate() {
+    if (!editor || !sessionId) return
+    const fresh = findDirectives(editor.state.doc).filter(d => d.complete && d.text && !firedDirectives.current.has(directiveKey(d)))
+    for (const d of fresh) {
+      firedDirectives.current.add(directiveKey(d))
+      void (async () => {
+        try {
+          await flush()
+          await api('/api/jobs', { instruction: d.text, blockIds: [d.blockId], sessionId, context: { tk: d.text } })
+          setState(await api<State>('/api/state'))
+        } catch (e) { firedDirectives.current.delete(directiveKey(d)); notify((e as Error).message) }
+      })()
+    }
+  }
+  function onContextMenu(event: React.MouseEvent) {
+    if (!editor || mode !== 'editing' || !(event.target as HTMLElement).closest('.tiptap')) return
+    if ((event.target as HTMLElement).closest('.suggestion-host')) return
+    event.preventDefault()
+    const { from, to } = editor.state.selection
+    setMenu({ x: event.clientX, y: event.clientY, selection: from !== to ? editor.state.doc.textBetween(from, to, ' ').trim() : '', blockId: currentBlockId() })
+  }
+  const menuItems: MenuItem[] = menu ? (() => {
+    const connected = (state?.sessions ?? []).some(s => s.connected)
+    const hasSelection = Boolean(menu.selection)
+    const copy = () => { try { document.execCommand('copy') } catch {} }
+    const cut = () => { try { document.execCommand('cut') } catch {} }
+    const paste = async () => { try { const text = await navigator.clipboard.readText(); if (text) editor!.chain().focus().insertContent(text).run() } catch { notify('Paste with ⌘V; the browser blocked clipboard access.') } }
+    const proofread = async () => {
+      if (!menu.blockId) return
+      try {
+        await flush()
+        const pos = blockPosition(menu.blockId)
+        const $pos = pos ? editor!.state.doc.resolve(pos.pos) : undefined
+        let table: { ids: string[] } | undefined
+        for (let d = $pos?.depth ?? 0; d > 0; d--) { const n = $pos!.node(d); if (n.type.name === 'table') { const ids: string[] = [n.attrs.id]; n.descendants(c => { if (c.type.name === 'paragraph' && c.attrs.id) ids.push(c.attrs.id) }); table = { ids } } }
+        await api('/api/jobs', { instruction: table ? PROOFREAD_TABLE_INSTRUCTION : PROOFREAD_INSTRUCTION, blockIds: table ? table.ids : [menu.blockId], sessionId, kind: 'proofread', context: table ? { table: true } : undefined })
+        setState(await api<State>('/api/state'))
+      } catch (e) { notify((e as Error).message) }
+    }
+    return [
+      { icon: '✦', label: hasSelection ? 'Ask agent about this' : 'Ask agent…', hint: '⌘K', disabled: !connected, onSelect: () => openCommand('', menu.selection || undefined) },
+      { icon: '✓', label: 'Proofread this', disabled: !connected || !menu.blockId, onSelect: () => void proofread() },
+      { separator: true, label: '' },
+      { icon: 'B', label: 'Bold', hint: '⌘B', onSelect: () => runAction(editor!, 'bold') },
+      { icon: 'I', label: 'Italic', hint: '⌘I', onSelect: () => runAction(editor!, 'italic') },
+      { icon: 'H', label: view?.flags.h2 ? 'Normal text' : 'Heading', onSelect: () => runAction(editor!, view?.flags.h2 ? 'paragraph' : 'h2') },
+      { icon: '▦', label: 'Insert table', onSelect: () => runAction(editor!, 'table') },
+      { separator: true, label: '' },
+      { icon: '', label: 'Cut', hint: '⌘X', disabled: !hasSelection, onSelect: cut },
+      { icon: '', label: 'Copy', hint: '⌘C', disabled: !hasSelection, onSelect: copy },
+      { icon: '', label: 'Paste', hint: '⌘V', onSelect: () => void paste() },
+    ]
+  })() : []
+
+  live.current = { openCommand, executeSlash, accept, currentBlockId, currentBlockChain, onUpdate: onEditorUpdate }
 
   if (authed === false) return <KeyGate onSubmit={submitKey} error={gateError} />
   if (!editor) return null
@@ -388,15 +475,17 @@ export function App() {
         <main className="writing">
           <div className="document-heading"><input ref={titleRef} aria-label="Document title" defaultValue="Working notes" readOnly={mode !== 'editing'} onInput={() => { dirty.current = true; queueSync() }} /></div>
           {mode === 'editing' && <Toolbar editor={editor} flags={view?.flags ?? { bold: false, italic: false, h1: false, h2: false, h3: false, inTable: false }} disabled={busy} />}
-          <div className={`page ${mode}`} ref={pageRef}>
+          <div className={`page ${mode}`} ref={pageRef} onContextMenu={onContextMenu}>
+            <OffscreenMarkers markers={markers} tick={tick} container={pageRef} />
             <EditorContent editor={editor} />
-            <CommandBar open={command.open} anchor={command.anchor} initial={command.initial} scopeLabel={command.scopeId ? 'This paragraph' : 'Around the caret'} sessions={sessions} sessionId={sessionId} onSessionChange={setSessionId} onSubmit={submitCommand} onClose={closeCommand} />
+            <CommandBar open={command.open} anchor={command.anchor} initial={command.initial} selection={command.selection} scopeLabel={command.scopeId ? 'This paragraph' : 'Around the caret'} sessions={sessions} sessionId={sessionId} onSessionChange={setSessionId} onSubmit={submitCommand} onClose={closeCommand} />
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>
         <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); proofreadSeen.current.clear(); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onNotify={notify} />
       </div>
       {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} onAccept={accept} onReject={reject} onReconsider={reconsider} />, hostFor(p.id), p.id))}
+      <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />
       {slashOpen && slashPosition && <SlashMenu query={view!.slashText} index={slashIndex} position={slashPosition} onPick={executeSlash} />}
       <div id="toast" role="status" aria-live="polite" className={toast ? 'visible' : ''}>{toast}</div>
     </>

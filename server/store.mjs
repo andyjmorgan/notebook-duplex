@@ -12,16 +12,70 @@ export function blocksOf(doc) {
     if (TEXT_BLOCKS.includes(node.type) && node.attrs?.id) {
       const plain = (node.content ?? []).every(n => n.type === 'text' && !n.marks?.length)
       blocks.push({ id: node.attrs.id, type: node.type, level: node.attrs.level, text: textOf(node), revision: hash(node), plain, topLevelId })
+    } else if (node.type === 'table' && node.attrs?.id) {
+      blocks.push({ id: node.attrs.id, type: 'table', text: tableMarkdown(node), revision: hash(node), plain: tableIsPlain(node), topLevelId, rows: tableRows(node).length })
     }
     for (const child of node.content ?? []) walk(child, topLevelId ?? child.attrs?.id)
   }
   for (const child of doc.content ?? []) walk(child, child.attrs?.id)
   return blocks
 }
+// Tables are addressed as one block whose text is their GFM Markdown.
+export function tableRows(table) {
+  return (table.content ?? []).filter(r => r.type === 'tableRow').map(row => ({ header: (row.content ?? []).every(c => c.type === 'tableHeader'), cells: (row.content ?? []).map(cell => ({ node: cell, text: (cell.content ?? []).map(textOf).join('\n').trim() })) }))
+}
+export function tableIsPlain(table) {
+  return tableRows(table).every(r => r.cells.every(c => (c.node.content ?? []).every(p => p.type === 'paragraph' && (p.content ?? []).every(n => n.type === 'text' && !n.marks?.length))))
+}
+const escapeCell = text => text.replace(/\|/g, '\\|').replace(/\n+/g, ' ')
+export function tableMarkdown(table) {
+  const rows = tableRows(table)
+  if (!rows.length) return ''
+  const width = Math.max(...rows.map(r => r.cells.length))
+  const line = cells => '| ' + Array.from({ length: width }, (_, i) => escapeCell(cells[i]?.text ?? '')).join(' | ') + ' |'
+  const out = [line(rows[0].cells), '| ' + Array.from({ length: width }, () => '---').join(' | ') + ' |']
+  for (const row of rows.slice(1)) out.push(line(row.cells))
+  return out.join('\n')
+}
+export function parseTableMarkdown(markdown) {
+  const lines = String(markdown).split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('|'))
+  const split = l => l.replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'))
+  const rows = lines.filter(l => !/^\|(\s*:?-{3,}:?\s*\|)+$/.test(l)).map(split)
+  if (!rows.length) throw new Error('A table replacement must be a GFM Markdown table')
+  const width = Math.max(...rows.map(r => r.length))
+  return rows.map(r => Array.from({ length: width }, (_, i) => r[i] ?? ''))
+}
+export function blockText(node) { return node.type === 'table' ? tableMarkdown(node) : textOf(node) }
 export function textOf(node) {
   if (node.type === 'text') return node.text ?? ''
   if (node.type === 'hardBreak') return '\n'
   return (node.content ?? []).map(textOf).join('')
+}
+function rebuildTable(table, rows, taken) {
+  const old = tableRows(table)
+  const headerFirst = old[0]?.header ?? true
+  const content = rows.map((cells, r) => {
+    const oldRow = old[r]
+    const rowNode = { type: 'tableRow', attrs: { ...(oldRow ? (table.content.filter(x => x.type === 'tableRow')[r].attrs ?? {}) : {}) }, content: cells.map((text, c) => {
+      const oldCell = oldRow?.cells[c]?.node
+      const oldParagraph = oldCell?.content?.find(p => p.type === 'paragraph')
+      const cellType = r === 0 && headerFirst ? 'tableHeader' : 'tableCell'
+      return { type: cellType, attrs: { ...(oldCell?.attrs ?? {}), colspan: 1, rowspan: 1 }, content: [{ type: 'paragraph', attrs: { ...(oldParagraph?.attrs ?? {}) }, content: text ? [{ type: 'text', text }] : [] }] }
+    }) }
+    return rowNode
+  })
+  const next = { ...table, content }
+  // Fresh ids for new rows/cells, keep the table's own id.
+  const keep = new Set(); collectIds(table, keep)
+  const seen = new Set()
+  const fix = node => {
+    if (node.attrs && 'id' in node.attrs) { if (!node.attrs.id || seen.has(node.attrs.id)) node.attrs = { ...node.attrs, id: randomUUID() }; seen.add(node.attrs.id); taken.add(node.attrs.id) }
+    else if (ID_TYPES.includes(node.type)) { node.attrs = { ...(node.attrs ?? {}), id: randomUUID() }; taken.add(node.attrs.id) }
+    for (const child of node.content ?? []) fix(child)
+  }
+  seen.add(next.attrs.id)
+  for (const row of next.content) fix(row)
+  return next
 }
 function findNode(node, id) {
   if (node.attrs?.id === id) return node
@@ -74,7 +128,8 @@ export class Store {
     const snapshot = structuredClone(this.snapshot())
     const known = new Set(snapshot.blocks.map(b => b.id))
     const selected = [...new Set(blockIds ?? [])].filter(id => known.has(id))
-    const job = { id: randomUUID(), instruction, sessionId, sessionName, kind, blockIds: selected, documentId: snapshot.id, snapshot, status: 'queued', createdAt: Date.now(), context }
+    const safeContext = context && typeof context === 'object' ? { ...context, selection: typeof context.selection === 'string' ? context.selection.slice(0, 4000) : undefined } : undefined
+    const job = { id: randomUUID(), instruction, sessionId, sessionName, kind, blockIds: selected, documentId: snapshot.id, snapshot, status: 'queued', createdAt: Date.now(), context: safeContext, directive: typeof safeContext?.tk === 'string' ? safeContext.tk.slice(0, 500) : undefined }
     this.state.jobs.push(job)
     if (this.state.jobs.length > 200) this.state.jobs.splice(0, this.state.jobs.length - 200)
     return job
@@ -115,11 +170,12 @@ export class Store {
     if (type === 'replace') {
       const block = job.snapshot.blocks.find(b => b.id === input.blockId)
       if (!block || (job.blockIds.length && !job.blockIds.includes(block.id))) throw new Error('Target outside job scope')
-      if (!block.plain) throw new Error('Replacement proposals support plain-text paragraphs and headings only. Use an insert proposal for formatted content.')
+      if (!block.plain) throw new Error('Replacement proposals support plain-text paragraphs, headings and tables only. Use an insert proposal for formatted content.')
       if (input.before !== block.text || input.blockRevision !== block.revision) throw new Error('Proposal must match the job snapshot: use before and blockRevision from claim_job.')
-      validateText(input.after)
+      if (block.type === 'table') parseTableMarkdown(input.after); else validateText(input.after)
+      if (typeof input.after !== 'string' || input.after.length > 50000) throw new Error('Replacement must be under 50,000 characters')
       if (input.after === block.text) throw new Error('Proposal is identical to the current text')
-      const proposal = { ...base, blockId: block.id, blockRevision: block.revision, before: block.text, after: input.after }
+      const proposal = { ...base, blockId: block.id, blockType: block.type, blockRevision: block.revision, before: block.text, after: input.after }
       this.state.proposals.push(proposal)
       return proposal
     }
@@ -163,7 +219,7 @@ export class Store {
     if (!doc) return true
     if (proposal.type === 'insert') return topLevelIndex(doc, proposal.anchorBlockId) === -1
     const node = findNode(doc, proposal.blockId)
-    return !node || hash(node) !== proposal.blockRevision || textOf(node) !== proposal.before
+    return !node || hash(node) !== proposal.blockRevision || blockText(node) !== proposal.before
   }
 
   review(id, decision, options = {}) {
@@ -187,6 +243,19 @@ export class Store {
       proposal.status = 'accepted'
       proposal.reviewedAt = Date.now()
       return { proposal, document: this.state.document, inserted }
+    } else if (proposal.blockType === 'table') {
+      const text = typeof options.text === 'string' ? options.text : proposal.after
+      const rows = parseTableMarkdown(text)
+      const index = topLevelIndex(doc, proposal.blockId)
+      const node = findNode(doc, proposal.blockId)
+      const rebuilt = rebuildTable(node, rows, collectIds(doc))
+      if (index !== -1 && doc.content[index].attrs?.id === proposal.blockId) doc.content[index] = rebuilt
+      else Object.assign(node, rebuilt)
+      proposal.finalText = text
+      this.state.document.revision++
+      proposal.status = 'accepted'
+      proposal.reviewedAt = Date.now()
+      return { proposal, document: this.state.document, node: rebuilt }
     } else {
       const text = typeof options.text === 'string' ? options.text : proposal.after
       validateText(text)
