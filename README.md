@@ -67,7 +67,7 @@ NOTEBOOK_API_KEY=devkey npm run server     # http://127.0.0.1:8787, data in .run
 npm run dev                                # Vite on http://127.0.0.1:5173, proxies /api and /mcp
 ```
 
-Without a key, the server prints a generated one at startup. For a production-like run, `npm run build` then open the server URL directly. The container image (`Dockerfile`) is built and pushed to `ghcr.io/andyjmorgan/notebook-duplex` by the `Container image` workflow on every push to `main`.
+Without a key, the server prints a generated one at startup. For a production-like run, `npm run build` then open the server URL directly. The container image (`Dockerfile`) is built on the lab's self-hosted runners and pushed to the internal Nexus registry (`192.168.0.140:5555/notebook-duplex`) by the `Container image` workflow on every push to `main`.
 
 Environment: `NOTEBOOK_API_KEY`, `PORT` (8787), `HOST` (127.0.0.1), `DATA_DIR` (`.runtime`), `PUBLIC_URL` (used for the MCP URL shown in the UI), `SESSION_GRACE_MS` (how long a session survives without its SSE stream, 20000).
 
