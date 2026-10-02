@@ -6,20 +6,21 @@ type Props = {
   jobs: Job[]; activity: Activity[]; proposals: Proposal[]
   mcpUrl: string; apiKey: string
   proofread: boolean; onProofread: (on: boolean) => void
-  onAsk: () => void; onDirective: () => void; onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void
+  onAsk: () => void; onDirective: () => void; onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; busy: boolean
   onNotify: (message: string) => void
 }
 const active = (j: Job) => ['queued', 'running', 'needs_permission'].includes(j.status)
 const stateVerb: Record<string, string> = { reading: 'Reading', thinking: 'Thinking', writing: 'Writing', waiting: 'Waiting on you', done: 'Finishing' }
 const statusLabel: Record<string, string> = { queued: 'Queued', needs_permission: 'Needs permission in Claude\'s terminal', abandoned: 'Abandoned' }
 
-export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onNotify }: Props) {
+export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onAsk, onDirective, onDemo, onCancel, onLocate, onAcceptAll, busy, onNotify }: Props) {
   const [showKey, setShowKey] = useState(false)
   const connected = sessions.filter(s => s.connected)
   const current = connected.find(s => s.id === sessionId)
   const live = jobs.filter(active)
   const recent = [...jobs].filter(j => !active(j)).reverse().slice(0, 6)
   const pending = proposals.filter(p => p.status === 'pending')
+  const acceptable = pending.filter(p => !p.stale && p.type !== 'comment')
   const origin = mcpUrl.replace(/\/mcp$/, '')
   const command = `claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${origin} --key ${showKey ? apiKey : '<notebook key>'}`
   const copy = async (text: string, label: string) => { try { await navigator.clipboard.writeText(text); onNotify(label) } catch { onNotify('Copy failed. Select the text instead.') } }
@@ -69,7 +70,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
       </section>
 
       <section className="rail-section">
-        <div className="section-label"><span>To review</span><span>{pending.length}</span></div>
+        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone.">Accept all {acceptable.length}</button>}<span>{pending.length}</span></span></div>
         {pending.length ? pending.map(p => (
           <button key={p.id} className="review-link" onClick={() => onLocate(p)}>
             <span className={`review-dot ${p.stale ? 'stale' : p.type}`} />

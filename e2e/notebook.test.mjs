@@ -34,6 +34,19 @@ test('writer and agent collaborate end to end in the browser', async t => {
   assert.equal(new Set(paragraphs.map(n => n.attrs.id)).size, paragraphs.length)
   assert.equal(await page.locator('#toc button').count(), 3)
 
+  // Accept all: two fixture proposals applied in one click, in document order
+  await page.click('.tiptap > p:nth-of-type(2)')
+  await page.click('button.test-button')
+  await page.waitForSelector('.suggestion.insert')
+  await page.click('.rail .accept-all')
+  await until(async () => (await page.locator('.suggestion').count()) === 0).catch(async e => { throw new Error(e.message + ' cards=' + await page.locator('.suggestion').count() + ' toasts=' + JSON.stringify(await toasts()) + ' props=' + JSON.stringify((await request('/api/state')).data.proposals.map(p => [p.type, p.status]))) })
+  await until(async () => (await page.locator('.tiptap blockquote').count()) === 1)
+  assert.ok((await page.locator('.tiptap > p:nth-of-type(2)').textContent()).includes('local test suggestion'))
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('tiptap')), true, 'focus returns to the document after Accept all')
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z')
+  await until(async () => (await page.locator('.tiptap blockquote').count()) === 0)
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+
   // Local fixture: replace + insert proposals rendered inline
   await page.click('.tiptap > p:nth-of-type(2)')
   await page.click('button.test-button')
@@ -290,6 +303,11 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.click('.tiptap > h1')
   await page.waitForSelector('.mermaid-block.showing-diagram', { timeout: 8000 }).catch(async e => { throw new Error(e.message + ' class=' + await page.evaluate(() => document.querySelector('.mermaid-block')?.className)) })
   await until(async () => (await page.locator('.mermaid-preview svg').innerHTML()).includes('Ship'), 20000)
+  await page.hover('.mermaid-preview'); await page.click('.mermaid-expand')
+  await page.waitForSelector('dialog.mermaid-modal[open] svg')
+  await shot('mermaid-modal')
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('dialog.mermaid-modal', { state: 'detached' })
   await shot('mermaid')
   assert.deepEqual(errors, [])
 })

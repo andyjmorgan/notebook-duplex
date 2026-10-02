@@ -360,10 +360,11 @@ export function App() {
     else runAction(editor, cmd)
   }
 
-  async function withBusy(fn: () => Promise<void>) {
-    if (busy) return
-    setBusy(true)
-    try { await fn() } catch (e) { notify((e as Error).message); throw e } finally { setBusy(false); void refresh() }
+  const busyRef = useRef(false)
+  async function withBusy(fn: () => Promise<void>, { quiet = false } = {}) {
+    if (busyRef.current && !quiet) return
+    busyRef.current = true; setBusy(true)
+    try { await fn() } catch (e) { notify((e as Error).message); throw e } finally { busyRef.current = false; setBusy(false); void refresh() }
   }
   const accept = async (proposal: Proposal, edited: string) => withBusy(async () => {
     if (!editor) return
@@ -449,6 +450,20 @@ export function App() {
     dirty.current = false; setSaveState('Saved'); queueSync()
     notify(proposal.after === '' && proposal.type === 'replace' ? 'Removed. ⌘Z undoes it.' : 'Accepted. ⌘Z undoes it.')
   })
+  async function acceptAll() {
+    const pending = (stateRef.current?.proposals ?? []).filter(p => p.status === 'pending' && !p.stale && p.type !== 'comment')
+    if (!editor || !pending.length) return
+    const order = new Map<string, number>()
+    editor.state.doc.descendants((node, pos) => { if (node.attrs?.id) order.set(node.attrs.id, pos) })
+    const at = (p: Proposal) => order.get(p.type === 'insert' || p.type === 'move' ? p.anchorBlockId ?? '' : p.type === 'replace_text' ? p.edits?.[0]?.blockId ?? '' : p.blockId ?? '') ?? Number.MAX_SAFE_INTEGER
+    const queue = [...pending].sort((a, b) => at(a) - at(b))
+    let done = 0, failed = 0
+    for (const p of queue) {
+      try { await accept(p, p.type === 'insert' ? p.markdown ?? '' : p.after ?? ''); done++ } catch { failed++ }
+    }
+    notify(`Accepted ${done} ${done === 1 ? 'suggestion' : 'suggestions'}${failed ? `, ${failed} could not be applied` : ''}. ⌘Z steps back through them.`)
+    editor.commands.focus()
+  }
   const resolve = async (proposal: Proposal) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'resolve' }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'resolved' } : p) }) })
   const reply = async (proposal: Proposal, feedback: string) => withBusy(async () => { await api('/api/review', { id: proposal.id, decision: 'reply', feedback }); setState(prev => prev && { ...prev, proposals: prev.proposals.map(p => p.id === proposal.id ? { ...p, status: 'replied' } : p) }); notify('Reply sent.') })
   const parseMarkdown = (markdown: string): any[] => editor?.markdown?.parse(markdown)?.content ?? []
@@ -582,7 +597,7 @@ export function App() {
           </div>
           <footer className="document-footer"><span>{view?.words ?? 0} words</span><span><kbd>⌘K</kbd> ask · <kbd>/</kbd> insert · <kbd>⌘↵</kbd> accept the suggestion under the caret</span></footer>
         </main>
-        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onNotify={notify} />
+        <Rail sessions={sessions} sessionId={sessionId} onSession={setSessionId} jobs={state?.jobs ?? []} activity={state?.activity ?? []} proposals={state?.proposals ?? []} mcpUrl={mcpUrl} apiKey={key} proofread={proofread} onProofread={on => { setProofread(on); notify(on ? 'Proofreading settled paragraphs.' : 'Proofreading paused.') }} onAsk={() => openCommand()} onDirective={runDirective} onDemo={demo} onCancel={cancelJob} onLocate={locate} onAcceptAll={acceptAll} busy={busy} onNotify={notify} />
       </div>
       {pending.map(p => createPortal(<SuggestionCard key={p.id} proposal={p} session={sessions.find(s => s.id === p.sessionId)} busy={busy} parseMarkdown={parseMarkdown} onAccept={accept} onReject={reject} onReconsider={reconsider} onResolve={resolve} onReply={reply} />, hostFor(p.id), p.id))}
       <ContextMenu position={menu} items={menuItems} onClose={() => setMenu(null)} />

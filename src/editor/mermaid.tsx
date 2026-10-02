@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { TextSelection } from '@tiptap/pm/state'
 import CodeBlock from '@tiptap/extension-code-block'
@@ -42,11 +43,22 @@ export function MermaidPreview({ source }: { source: string }) {
     }, 350)
     return () => { cancelled = true; clearTimeout(timer) }
   }, [source])
+  const [expanded, setExpanded] = useState(false)
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => { const d = dialog.current; if (!d) return; if (expanded && !d.open) d.showModal(); if (!expanded && d.open) d.close() }, [expanded])
   if (!source.trim()) return <div className="mermaid-preview empty">Type a Mermaid diagram above to preview it here.</div>
   return (
     <div className={`mermaid-preview ${error ? 'has-error' : ''}`} contentEditable={false}>
+      {svg && <button type="button" className="mermaid-expand" title="Expand diagram" aria-label="Expand diagram" onMouseDown={e => e.preventDefault()} onClick={() => setExpanded(true)}>⤢</button>}
       {svg && <div ref={host} className="mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />}
       {error && <div className="mermaid-error">{error}</div>}
+      {expanded && createPortal(
+        <dialog ref={dialog} className="mermaid-modal" onClose={() => setExpanded(false)} onClick={e => { if (e.target === dialog.current) setExpanded(false) }}>
+          <div className="mermaid-modal-body">
+            <button type="button" className="quiet small mermaid-close" onClick={() => setExpanded(false)} aria-label="Close">Close <kbd>esc</kbd></button>
+            <div className="mermaid-modal-svg" dangerouslySetInnerHTML={{ __html: svg }} />
+          </div>
+        </dialog>, document.body)}
     </div>
   )
 }
