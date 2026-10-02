@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.runtime/
+src-tauri/target/
+.DS_Store
+.personal-claude/
+.env
+.env.*
+*.log
+src-tauri/gen/schemas/
