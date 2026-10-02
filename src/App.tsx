@@ -344,8 +344,10 @@ export function App() {
     if (page) {
       const rect = page.getBoundingClientRect()
       const pos = scopeId ? blockPosition(scopeId) : undefined
-      const coords = editor.view.coordsAtPos(pos ? pos.pos + pos.size - 1 : editor.state.selection.from)
-      anchor = { top: coords.bottom - rect.top + 10, left: 0 }
+      // Anchor under the block's rendered box (works for diagrams whose source is hidden); fall back to the caret.
+      const dom = pos ? editor.view.nodeDOM(pos.pos) as HTMLElement | null : null
+      const bottom = dom?.getBoundingClientRect ? dom.getBoundingClientRect().bottom : editor.view.coordsAtPos(pos ? pos.pos + pos.size - 1 : editor.state.selection.from).bottom
+      anchor = { top: bottom - rect.top + 10, left: 0 }
     }
     setCommand({ open: true, initial, scopeId, selection, anchor, scopeLabel: explicitScope?.label })
   }
