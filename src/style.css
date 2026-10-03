@@ -161,7 +161,10 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--ui-border); bord
 .tiptap .tk-chip.open { border-style: dashed; background: #faf7ff }
 .tiptap .tk-chip.open::after { content: "  ] sends"; color: var(--ui-text-tertiary); font-size: 10px; font-family: "Noto Sans", sans-serif; letter-spacing: .2px }
 .tiptap .tk-chip.tk-queued { border-color: var(--ui-border-strong); background: var(--ui-background-secondary); color: var(--ui-text-secondary) }
-.tiptap .tk-chip.tk-working { background: linear-gradient(90deg, #eef0ff, #f8f5ff, #eef0ff); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; border-color: #cfd4ff; color: var(--ui-ai) }
+@property --tk-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg }
+.tiptap .tk-chip.tk-working { color: var(--ui-ai); border: 1px solid transparent; background: linear-gradient(#f4f5ff, #f4f5ff) padding-box, conic-gradient(from var(--tk-angle), #dfe3ff 0deg, var(--ui-ai) 70deg, #d97757 120deg, #dfe3ff 200deg, #dfe3ff 360deg) border-box; animation: tk-orbit 1.8s linear infinite }
+@keyframes tk-orbit { to { --tk-angle: 360deg } }
+@media (prefers-reduced-motion: reduce) { .tiptap .tk-chip.tk-working { animation: none; border-color: var(--ui-ai) } .tiptap .tk-chip.tk-working::before { animation: none } }
 .tiptap .tk-chip.tk-done { background: var(--ui-success-soft); border-color: #cde6d4; color: var(--ui-success); text-decoration: line-through; text-decoration-color: rgba(42,126,65,.4) }
 .tiptap .tk-chip.tk-failed { background: var(--ui-warning-soft); border-color: #f1dcb8; color: var(--ui-warning) }
 @keyframes shimmer { from { background-position: 200% 0 } to { background-position: 0 0 } }
