@@ -123,7 +123,7 @@ function collectIds(node, out = new Set()) {
   for (const child of node.content ?? []) collectIds(child, out)
   return out
 }
-function assignIds(node, taken) {
+export function assignIds(node, taken) {
   if ((node.attrs && 'id' in node.attrs) || ID_TYPES.includes(node.type)) {
     node.attrs = { ...(node.attrs ?? {}) }
     if (!node.attrs.id || taken.has(node.attrs.id)) node.attrs.id = randomUUID()
@@ -157,13 +157,13 @@ export class Store {
 
   snapshot() { return { ...this.state.document, blocks: blocksOf(this.state.document.json ?? { type: 'doc' }) } }
 
-  enqueue({ instruction, blockIds, sessionId, sessionName, kind = 'command', context }) {
+  enqueue({ instruction, blockIds, sessionId, sessionName, kind = 'command', context, requestedBy }) {
     if (!instruction?.trim() || instruction.length > 10000) throw new Error('Enter a command under 10,000 characters.')
     const snapshot = structuredClone(this.snapshot())
     const known = new Set(snapshot.blocks.map(b => b.id))
     const selected = [...new Set(blockIds ?? [])].filter(id => known.has(id))
     const safeContext = context && typeof context === 'object' ? { ...context, selection: typeof context.selection === 'string' ? context.selection.slice(0, 4000) : undefined } : undefined
-    const job = { id: randomUUID(), instruction, sessionId, sessionName, kind, blockIds: selected, documentId: snapshot.id, snapshot, status: 'queued', createdAt: Date.now(), context: safeContext, directive: typeof safeContext?.tk === 'string' ? safeContext.tk.slice(0, 500) : undefined }
+    const job = { id: randomUUID(), instruction, sessionId, sessionName, kind, blockIds: selected, documentId: snapshot.id, documentTitle: snapshot.title, requestedBy, snapshot, status: 'queued', createdAt: Date.now(), context: safeContext, directive: typeof safeContext?.tk === 'string' ? safeContext.tk.slice(0, 500) : undefined }
     this.state.jobs.push(job)
     if (this.state.jobs.length > 200) this.state.jobs.splice(0, this.state.jobs.length - 200)
     return job

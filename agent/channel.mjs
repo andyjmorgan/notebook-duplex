@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // Local stdio channel for Claude Code. Claude spawns this process; it proxies tools to the hosted
 // Notebook Duplex server over MCP Streamable HTTP and forwards channel notifications back over stdio.
+// Authenticate with a personal access token (ndp_…) minted under Settings > Agent access tokens in the app.
 //
 //   claude mcp add --transport stdio notebook-duplex -- node /path/to/agent/channel.mjs \
-//     --url https://notebook.donkeywork.dev --key <notebook key>
+//     --url https://notebook.donkeywork.dev --token ndp_…
 //   claude --dangerously-load-development-channels server:notebook-duplex
+//
+// --key is accepted as an alias of --token; NOTEBOOK_DUPLEX_TOKEN (or NOTEBOOK_DUPLEX_KEY) works as an environment variable.
 import { basename } from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -16,14 +19,14 @@ import { z } from 'zod'
 const args = process.argv.slice(2)
 const option = (name, env) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : process.env[env] }
 const url = (option('--url', 'NOTEBOOK_DUPLEX_URL') ?? 'https://notebook.donkeywork.dev').replace(/\/$/, '')
-const key = option('--key', 'NOTEBOOK_DUPLEX_KEY')
+const key = option('--token', 'NOTEBOOK_DUPLEX_TOKEN') ?? option('--key', 'NOTEBOOK_DUPLEX_KEY')
 const name = option('--name', 'NOTEBOOK_DUPLEX_NAME') ?? basename(process.cwd())
-if (!key) { console.error('notebook-duplex channel: pass --key <notebook key> or set NOTEBOOK_DUPLEX_KEY'); process.exit(2) }
+if (!key) { console.error('notebook-duplex channel: pass --token ndp_… (an agent access token from the app) or set NOTEBOOK_DUPLEX_TOKEN'); process.exit(2) }
 const log = message => console.error('notebook-duplex channel: ' + message)
 
 const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()).optional() }).passthrough() })
 let remote, remoteReady = Promise.resolve(), instructions = ''
-const local = new Server({ name: 'notebook-duplex', version: '0.2.0' }, { capabilities: { tools: { listChanged: true }, experimental: { 'claude/channel': {} } } })
+const local = new Server({ name: 'notebook-duplex', version: '0.3.0' }, { capabilities: { tools: { listChanged: true }, experimental: { 'claude/channel': {} } } })
 let lastToolSignature = ''
 
 async function connectRemote(attempt = 0) {

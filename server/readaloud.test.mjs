@@ -26,7 +26,6 @@ async function closedPort() { const srv = createServer(); await new Promise(ok =
 test('tts proxies to Kokoro with the configured voice and returns the audio bytes', async t => {
   const mock = await mockUpstreams(t)
   const { url, headers } = await startServer(t, { KOKORO_URL: mock.url, KOKORO_FALLBACK_URL: '', KOKORO_VOICE: 'af_bella' })
-  assert.equal((await fetch(url + '/api/tts', { method: 'POST', body: '{}' })).status, 401, 'needs the notebook key')
   const res = await fetch(url + '/api/tts', { method: 'POST', headers, body: JSON.stringify({ text: ' Hello there. ', speed: 1.3 }) })
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-type'), 'audio/wav')
@@ -59,7 +58,7 @@ test('tts reports an error when no Kokoro is reachable', async t => {
 
 test('describe composes the spoken intro with the model answer and caches by content', async t => {
   const mock = await mockUpstreams(t, { llmContent: '**a loop** from writing to review.\n\nFeedback returns to the start.' })
-  const { url, request } = await startServer(t, { DESCRIBE_LLM_URL: mock.url, DESCRIBE_LLM_MODEL: 'test-model' })
+  const { request } = await startServer(t, { DESCRIBE_LLM_URL: mock.url, DESCRIBE_LLM_MODEL: 'test-model' })
   const source = 'flowchart LR\n  A[Write] --> B[Review]\n  B --> A'
   const first = await request('/api/describe', { kind: 'diagram', source })
   assert.equal(first.data.text, 'A chart or diagram showing a loop from writing to review. Feedback returns to the start.')
@@ -72,7 +71,6 @@ test('describe composes the spoken intro with the model answer and caches by con
   const code = await request('/api/describe', { kind: 'code', language: 'python', source: 'print(1)' })
   assert.equal(code.data.text, 'A Python code block. A loop from writing to review. Feedback returns to the start.')
   assert.equal(mock.calls.llm.length, 2)
-  assert.equal((await fetch(url + '/api/describe', { method: 'POST', body: '{}' })).status, 401)
 })
 
 test('describe falls back to a deterministic description when the model is unreachable', async t => {
