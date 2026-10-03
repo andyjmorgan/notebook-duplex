@@ -1,12 +1,19 @@
 import type { Editor } from '@tiptap/core'
+import type { ReactNode } from 'react'
+import { Bold, Code, Columns3, Heading1, Heading2, Heading3, Italic, List, ListOrdered, Minus, Plus, Quote, Redo2, Rows3, Table, Trash2, Type, Undo2 } from 'lucide-react'
+
 type Flags = { bold: boolean; italic: boolean; h1: boolean; h2: boolean; h3: boolean; inTable: boolean }
-const groups: { action: string; label: string; title: string; flag?: keyof Flags }[][] = [
-  [{ action: 'bold', label: 'B', title: 'Bold', flag: 'bold' }, { action: 'italic', label: 'I', title: 'Italic', flag: 'italic' }],
-  [{ action: 'h1', label: 'H1', title: 'Heading 1', flag: 'h1' }, { action: 'h2', label: 'H2', title: 'Heading 2', flag: 'h2' }, { action: 'h3', label: 'H3', title: 'Heading 3', flag: 'h3' }, { action: 'paragraph', label: 'Text', title: 'Normal text' }],
-  [{ action: 'bullet', label: '• List', title: 'Bullet list' }, { action: 'ordered', label: '1. List', title: 'Numbered list' }, { action: 'quote', label: 'Quote', title: 'Block quote' }, { action: 'code', label: 'Code', title: 'Code block' }],
-  [{ action: 'table', label: '＋ Table', title: 'Insert table' }, { action: 'undo', label: '↶', title: 'Undo' }, { action: 'redo', label: '↷', title: 'Redo' }],
+const groups: { action: string; label: ReactNode; title: string; flag?: keyof Flags }[][] = [
+  [{ action: 'bold', label: <Bold size={16} />, title: 'Bold', flag: 'bold' }, { action: 'italic', label: <Italic size={16} />, title: 'Italic', flag: 'italic' }],
+  [{ action: 'h1', label: <Heading1 size={16} />, title: 'Heading 1', flag: 'h1' }, { action: 'h2', label: <Heading2 size={16} />, title: 'Heading 2', flag: 'h2' }, { action: 'h3', label: <Heading3 size={16} />, title: 'Heading 3', flag: 'h3' }, { action: 'paragraph', label: <Type size={16} />, title: 'Normal text' }],
+  [{ action: 'bullet', label: <List size={16} />, title: 'Bullet list' }, { action: 'ordered', label: <ListOrdered size={16} />, title: 'Numbered list' }, { action: 'quote', label: <Quote size={16} />, title: 'Block quote' }, { action: 'code', label: <Code size={16} />, title: 'Code block' }],
+  [{ action: 'table', label: <Table size={16} />, title: 'Insert table' }, { action: 'undo', label: <Undo2 size={16} />, title: 'Undo' }, { action: 'redo', label: <Redo2 size={16} />, title: 'Redo' }],
 ]
-const tableActions = [{ action: 'row', label: '＋ Row' }, { action: 'column', label: '＋ Column' }, { action: 'deleteRow', label: '− Row' }, { action: 'deleteColumn', label: '− Column' }, { action: 'header', label: 'Header row' }, { action: 'deleteTable', label: 'Remove table' }]
+const tableActions: { action: string; label: ReactNode; title: string }[] = [
+  { action: 'row', label: <><Plus size={12} /><Rows3 size={14} /></>, title: 'Add row' }, { action: 'column', label: <><Plus size={12} /><Columns3 size={14} /></>, title: 'Add column' },
+  { action: 'deleteRow', label: <><Minus size={12} /><Rows3 size={14} /></>, title: 'Delete row' }, { action: 'deleteColumn', label: <><Minus size={12} /><Columns3 size={14} /></>, title: 'Delete column' },
+  { action: 'header', label: 'Header row', title: 'Toggle header row' }, { action: 'deleteTable', label: <><Trash2 size={13} /> Table</>, title: 'Remove table' },
+]
 
 export function runAction(editor: Editor, action: string) {
   const chain = editor.chain().focus()
@@ -39,14 +46,14 @@ export function Toolbar({ editor, flags, disabled }: { editor: Editor; flags: Fl
       <nav className="toolbar" aria-label="Formatting">
         {groups.map((group, g) => (
           <span className="toolbar-group" key={g}>
-            {group.map(item => <button key={item.action} type="button" data-action={item.action} title={item.title} aria-pressed={item.flag ? flags[item.flag] : undefined} className={item.flag && flags[item.flag] ? 'active' : ''} disabled={disabled} onMouseDown={e => e.preventDefault()} onClick={() => runAction(editor, item.action)}>{item.label}</button>)}
+            {group.map(item => <button key={item.action} type="button" data-action={item.action} title={item.title} aria-label={item.title} aria-pressed={item.flag ? flags[item.flag] : undefined} className={item.flag && flags[item.flag] ? 'active' : ''} disabled={disabled} onMouseDown={e => e.preventDefault()} onClick={() => runAction(editor, item.action)}>{item.label}</button>)}
           </span>
         ))}
       </nav>
       {flags.inTable && !disabled && (
         <nav className="table-tools" aria-label="Table">
           <span>Table</span>
-          {tableActions.map(item => <button key={item.action} type="button" data-action={item.action} onMouseDown={e => e.preventDefault()} onClick={() => runAction(editor, item.action)}>{item.label}</button>)}
+          {tableActions.map(item => <button key={item.action} type="button" data-action={item.action} title={item.title} aria-label={item.title} onMouseDown={e => e.preventDefault()} onClick={() => runAction(editor, item.action)}>{item.label}</button>)}
         </nav>
       )}
     </>

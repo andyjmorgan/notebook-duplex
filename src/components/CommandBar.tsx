@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Session } from '../types'
+import type { Session } from "../types"
+import { Sparkles } from "lucide-react"
 
 type Props = {
   open: boolean
@@ -32,7 +33,7 @@ export function CommandBar({ open, anchor, initial, selection, scopeLabel, sessi
   return (
     <div className="command-bar" role="dialog" aria-label="Ask your agent" style={{ top: anchor.top, left: anchor.left }} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); onClose() } }}>
       <div className="command-row">
-        <span className="command-spark" aria-hidden>✦</span>
+        <span className="command-spark" aria-hidden><Sparkles size={16} /></span>
         <textarea ref={input} autoFocus value={text} rows={1} placeholder={connected.length ? 'Ask for a rewrite, a source, a counter-argument…' : 'Connect a Claude session to send commands'} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} aria-label="Command for the agent" />
         <button className="primary small" onClick={() => void send()} disabled={!text.trim() || !connected.length || sending}>{sending ? 'Sending…' : 'Send'}<kbd>↵</kbd></button>
       </div>

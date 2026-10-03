@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 
-export type MenuItem = { label: string; hint?: string; icon?: string; iconClass?: string; title?: string; disabled?: boolean; danger?: boolean; separator?: boolean; onSelect?: () => void }
+export type MenuItem = { label: string; hint?: string; icon?: ReactNode; iconClass?: string; title?: string; disabled?: boolean; danger?: boolean; separator?: boolean; onSelect?: () => void }
 export function ContextMenu({ position, items, onClose }: { position: { x: number; y: number } | null; items: MenuItem[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {

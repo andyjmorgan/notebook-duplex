@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { z } from 'zod'
 import { startServer, until } from '../server/test-helpers.mjs'
+import { installLegacyShim } from './legacy-shim.mjs'
 
 const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()) }) })
 const shots = process.env.E2E_SHOTS
@@ -46,16 +47,16 @@ test('read-aloud narrates with highlights, interlocks with the agent, and emptie
   page.on('pageerror', e => errors.push(e.message))
   const shot = name => shots ? page.screenshot({ path: `${shots}/${name}.png` }) : Promise.resolve()
   const spoken = [], described = []
+  // TODO(integration): replace the shim with AUTH_DEV_USER once the library server lands. Registered first so the tts/describe routes below win.
+  await installLegacyShim(page, { url, apiKey })
   await page.route('**/api/tts', async route => { spoken.push(route.request().postDataJSON().text); await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() }) })
   await page.route('**/api/describe', async route => { const d = route.request().postDataJSON(); described.push(d); await route.fulfill({ json: { text: d.kind === 'diagram' ? 'A chart or diagram showing a flow from writing to review.' : 'A code block.', source: 'llm' } }) })
 
   await page.goto(url + '/')
-  await page.fill('input[aria-label="Notebook key"]', apiKey)
-  await page.click('button[type=submit]')
   await page.waitForSelector('.tiptap')
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  await page.evaluate(() => { window.confirm = () => true })
   await page.setInputFiles('input[type=file]', { name: 'read.md', mimeType: 'text/markdown', buffer: Buffer.from(DOC) })
+  await until(() => /\/d\/imported-1$/.test(page.url()))
   await page.waitForSelector('.mermaid-preview svg', { timeout: 20000 })
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
   const highlighted = () => page.evaluate(() => [...document.querySelectorAll('.tiptap .reading-now, .tiptap .reading-now-block')].map(e => e.tagName + ':' + e.textContent.trim().slice(0, 60)).join('|'))
@@ -171,10 +172,10 @@ test('read-aloud narrates with highlights, interlocks with the agent, and emptie
   assert.equal(await position(), 'Read aloud')
   assert.ok((await page.getAttribute('.player', 'class')).includes('idle'))
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  // The edit ended the reading, so the document's pending [tk] directive fires now (not while reading); settle it
-  const tkEvent = await until(() => notifications.find(n => /skip this note/.test(n.content)))
-  await client.callTool({ name: 'claim_job', arguments: { jobId: tkEvent.meta.job_id } })
-  await client.callTool({ name: 'report_job_status', arguments: { jobId: tkEvent.meta.job_id, status: 'completed', message: 'ok' } })
+  // A document opened from the library seeds its existing [tk] notes as already fired (import creates a new document now),
+  // so the imported note stays quiet and nothing locks the player.
+  await page.waitForTimeout(600)
+  assert.equal(notifications.some(n => /skip this note/.test(n.content)), false, 'imported directives do not fire on open')
   await until(async () => !(await page.locator('.player-main').isDisabled()), 6000)
   await page.click('.player-main')
   await until(async () => /^SPAN:Read me$/.test(await highlighted()))
