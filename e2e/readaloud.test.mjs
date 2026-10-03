@@ -5,7 +5,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { z } from 'zod'
 import { startServer, until } from '../server/test-helpers.mjs'
-import { installLegacyShim } from './legacy-shim.mjs'
 
 const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()) }) })
 const shots = process.env.E2E_SHOTS
@@ -39,16 +38,19 @@ Last words after the diagram.
 `
 
 test('read-aloud narrates with highlights, interlocks with the agent, and empties on edit', async t => {
-  const { url, apiKey, request } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
+  const { url, apiKey, request, createDocument } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
+  const first = await createDocument({ title: 'Working notes' })
   const browser = await chromium.launch()
   t.after(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 1440, height: 940 } })
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   const shot = name => shots ? page.screenshot({ path: `${shots}/${name}.png` }) : Promise.resolve()
+  const current = () => page.url().split('/d/')[1]
+  const doc = (action, body) => request(`/api/d/${current()}/${action}`, body)
+  const state = async () => (await doc('state')).data
   const spoken = [], described = []
-  // TODO(integration): replace the shim with AUTH_DEV_USER once the library server lands. Registered first so the tts/describe routes below win.
-  await installLegacyShim(page, { url, apiKey })
+  // Kokoro and the describe model are not part of the test; the real server answers everything else.
   await page.route('**/api/tts', async route => { spoken.push(route.request().postDataJSON().text); await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() }) })
   await page.route('**/api/describe', async route => { const d = route.request().postDataJSON(); described.push(d); await route.fulfill({ json: { text: d.kind === 'diagram' ? 'A chart or diagram showing a flow from writing to review.' : 'A code block.', source: 'llm' } }) })
 
@@ -56,7 +58,7 @@ test('read-aloud narrates with highlights, interlocks with the agent, and emptie
   await page.waitForSelector('.tiptap')
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
   await page.setInputFiles('input[type=file]', { name: 'read.md', mimeType: 'text/markdown', buffer: Buffer.from(DOC) })
-  await until(() => /\/d\/imported-1$/.test(page.url()))
+  await until(() => /\/d\/[0-9a-f-]{36}$/.test(page.url()) && !page.url().endsWith(first.id))
   await page.waitForSelector('.mermaid-preview svg', { timeout: 20000 })
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
   const highlighted = () => page.evaluate(() => [...document.querySelectorAll('.tiptap .reading-now, .tiptap .reading-now-block')].map(e => e.tagName + ':' + e.textContent.trim().slice(0, 60)).join('|'))
@@ -138,7 +140,7 @@ test('read-aloud narrates with highlights, interlocks with the agent, and emptie
   assert.match(await page.textContent('.rail-section.held'), /1 request held until you stop reading/)
   await shot('readaloud-held')
   await page.waitForTimeout(300)
-  assert.equal((await request('/api/state')).data.jobs.length, 0, 'nothing reaches the server while reading')
+  assert.equal((await state()).jobs.length, 0, 'nothing reaches the server while reading')
   assert.equal(await page.locator('.rail .proofreading input').isDisabled(), true)
   assert.equal(await page.locator('.test-button').isDisabled(), true)
   await page.click('.rail .stop-reading')
@@ -148,7 +150,7 @@ test('read-aloud narrates with highlights, interlocks with the agent, and emptie
 
   // Claude active: controls are disabled with a reason, and come back when the job finishes
   const jobId = heldEvent.meta.job_id
-  await until(async () => (await page.locator('.player-main').isDisabled()), 4000).catch(async () => { throw new Error('queued job should disable play; class=' + await page.getAttribute('.player', 'class') + ' jobs=' + JSON.stringify((await request('/api/state')).data.jobs.map(j => j.status))) })
+  await until(async () => (await page.locator('.player-main').isDisabled()), 4000).catch(async () => { throw new Error('queued job should disable play; class=' + await page.getAttribute('.player', 'class') + ' jobs=' + JSON.stringify((await state()).jobs.map(j => j.status))) })
   assert.match(await page.getAttribute('.player-main', 'title'), /Claude is working/)
   await client.callTool({ name: 'claim_job', arguments: { jobId } })
   await page.waitForSelector('.tiptap .agent-active')

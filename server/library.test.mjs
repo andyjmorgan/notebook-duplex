@@ -118,7 +118,7 @@ test('tags relate documents and wikilinks become links', async t => {
   const c = await createDocument({ title: 'Gamma', tags: ['k3s'] })
   await createDocument({ title: 'Unrelated', tags: ['cooking'] })
   const related = (await request('/api/documents/' + a.id)).data.related
-  assert.deepEqual(related.map(r => [r.title, r.sharedTags]), [['Beta', 2], ['Gamma', 1]])
+  assert.deepEqual(related.map(r => [r.title, r.sharedTags]), [['Beta', ['k3s', 'office']], ['Gamma', ['k3s']]])
   const tags = (await request('/api/tags')).data
   assert.deepEqual(tags.slice(0, 2), [{ tag: 'k3s', count: 3 }, { tag: 'office', count: 2 }])
   assert.deepEqual((await request('/api/tags/office')).data.map(d => d.title), ['Alpha', 'Beta'])

@@ -5,30 +5,32 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { z } from 'zod'
 import { startServer, until } from '../server/test-helpers.mjs'
-import { installLegacyShim } from './legacy-shim.mjs'
 
 const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()) }) })
 const shots = process.env.E2E_SHOTS
 
+// The real server with AUTH_DEV_USER (test Postgres and SeaweedFS): dev mode skips sign-in, and the one document in the
+// library opens at / with the welcome text. Document routes are read through whichever document the page has open.
 test('writer and agent collaborate end to end in the browser', async t => {
-  const { url, apiKey, request, output } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
+  const { url, apiKey, request, createDocument, output } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
+  const first = await createDocument({ title: 'Working notes' })
   const browser = await chromium.launch()
   t.after(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 1440, height: 940 } })
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   const shot = name => shots ? page.screenshot({ path: `${shots}/${name}.png` }) : Promise.resolve()
+  const current = () => page.url().split('/d/')[1]
+  const doc = (action, body) => request(`/api/d/${current()}/${action}`, body)
+  const state = async () => (await doc('state')).data
 
-  // TODO(integration): the key gate is gone. Sign-in is Keycloak (or AUTH_DEV_USER); the legacy shim answers /api/config
-  // with a dev user and maps the per-document routes onto the old server until server/index.mjs implements docs/library.md.
-  await installLegacyShim(page, { url, apiKey })
   await page.goto(url + '/')
   await page.waitForSelector('.tiptap')
-  await until(() => /\/d\//.test(page.url()))
+  await until(() => page.url().endsWith('/d/' + first.id))
   await page.evaluate(() => { const w = window; w.__toasts = []; new MutationObserver(() => { for (const el of document.querySelectorAll('[data-sonner-toast]')) { const t = el.textContent; if (t && w.__toasts[w.__toasts.length - 1] !== t) w.__toasts.push(t) } }).observe(document.body, { childList: true, characterData: true, subtree: true }) })
   const toasts = () => page.evaluate(() => window.__toasts)
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  const initial = (await request('/api/state')).data
+  const initial = (await state())
   const paragraphs = initial.document.json.content.filter(n => n.type === 'paragraph')
   assert.ok(paragraphs.every(n => n.attrs.id), 'paragraphs carry stable IDs')
   assert.equal(new Set(paragraphs.map(n => n.attrs.id)).size, paragraphs.length)
@@ -39,7 +41,7 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.click('button.test-button')
   await page.waitForSelector('.suggestion.insert')
   await page.click('.rail .accept-all')
-  await until(async () => (await page.locator('.suggestion').count()) === 0).catch(async e => { throw new Error(e.message + ' cards=' + await page.locator('.suggestion').count() + ' toasts=' + JSON.stringify(await toasts()) + ' props=' + JSON.stringify((await request('/api/state')).data.proposals.map(p => [p.type, p.status]))) })
+  await until(async () => (await page.locator('.suggestion').count()) === 0).catch(async e => { throw new Error(e.message + ' cards=' + await page.locator('.suggestion').count() + ' toasts=' + JSON.stringify(await toasts()) + ' props=' + JSON.stringify((await state()).proposals.map(p => [p.type, p.status]))) })
   await until(async () => (await page.locator('.tiptap blockquote').count()) === 1)
   assert.ok((await page.locator('.tiptap > p:nth-of-type(2)').textContent()).includes('local test suggestion'))
   assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('tiptap')), true, 'focus returns to the document after Accept all')
@@ -51,11 +53,11 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.click('.tiptap > p:nth-of-type(2)')
   await page.click('button.test-button')
   await page.waitForSelector('.suggestion.insert')
-  const revisionBefore = (await request('/api/state')).data.document.revision
+  const revisionBefore = (await state()).document.revision
   await page.click('.rail .reject-all')
   await until(async () => (await page.locator('.suggestion').count()) === 0)
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  assert.equal((await request('/api/state')).data.document.revision, revisionBefore, 'rejecting leaves the document untouched')
+  assert.equal((await state()).document.revision, revisionBefore, 'rejecting leaves the document untouched')
 
   // Local fixture: replace + insert proposals rendered inline
   await page.click('.tiptap > p:nth-of-type(2)')
@@ -144,11 +146,11 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.keyboard.press('Control+Enter')
   await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()) === 'Write in flow, with your Claude session beside you.').catch(async e => {
     await shot('accept-missing')
-    throw new Error(`${e.message}\ntoasts=${JSON.stringify(await toasts())}\npara1=${await page.locator('.tiptap > p:nth-of-type(1)').textContent()}\nproposals=${JSON.stringify((await request('/api/state')).data.proposals.map(p => [p.id.slice(0, 8), p.type, p.status, p.stale, p.blockId?.slice(0, 8)]))}\nserver=${output().slice(-800)}`)
+    throw new Error(`${e.message}\ntoasts=${JSON.stringify(await toasts())}\npara1=${await page.locator('.tiptap > p:nth-of-type(1)').textContent()}\nproposals=${JSON.stringify((await state()).proposals.map(p => [p.id.slice(0, 8), p.type, p.status, p.stale, p.blockId?.slice(0, 8)]))}\nserver=${output().slice(-800)}`)
   })
   await until(async () => (await page.locator('.suggestion').count()) === 0)
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  assert.equal((await request('/api/state')).data.document.json.content[0].content[0].text, 'Write in flow, with your Claude session beside you.')
+  assert.equal((await state()).document.json.content[0].content[0].text, 'Write in flow, with your Claude session beside you.')
   await page.keyboard.press('Control+z')
   await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()).startsWith('Write with your Claude session'))
 
@@ -157,9 +159,9 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.click('.toolbar [data-action="bold"]')
   await until(async () => (await page.locator('.tiptap > p:nth-of-type(1) strong').count()) === 1)
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  const fmtState = (await request('/api/state')).data
+  const fmtState = (await state())
   const fmtId = fmtState.document.json.content[0].attrs.id
-  const { data: fmtJob } = await request('/api/jobs', { instruction: 'Better word', blockIds: [fmtId], sessionId: (await request('/api/state')).data.sessions[0].id })
+  const { data: fmtJob } = await doc('jobs', { instruction: 'Better word', blockIds: [fmtId], sessionId: (await state()).sessions[0].id })
   const fmtClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: fmtJob.id } })).content[0].text)
   const fmtBlock = fmtClaim.snapshot.blocks.find(b => b.id === fmtId)
   assert.match(fmtBlock.text, /^\*\*.*\*\*$/, 'bold paragraph is presented as inline markdown')
@@ -169,8 +171,8 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await until(async () => (await page.locator('.tiptap > p:nth-of-type(1)').textContent()) === 'Write beside your Claude session.')
   assert.equal(await page.locator('.tiptap > p:nth-of-type(1) strong').textContent(), 'Write beside')
   assert.equal(await page.locator('.tiptap > p:nth-of-type(1) em').textContent(), 'Claude')
-  const delTarget = (await request('/api/state')).data.document.json.content.filter(n => n.type === 'paragraph').at(-1)
-  const { data: delJob } = await request('/api/jobs', { instruction: 'Remove duplicate', blockIds: [delTarget.attrs.id], sessionId: (await request('/api/state')).data.sessions[0].id })
+  const delTarget = (await state()).document.json.content.filter(n => n.type === 'paragraph').at(-1)
+  const { data: delJob } = await doc('jobs', { instruction: 'Remove duplicate', blockIds: [delTarget.attrs.id], sessionId: (await state()).sessions[0].id })
   const delClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: delJob.id } })).content[0].text)
   const delBlock = delClaim.snapshot.blocks.find(b => b.id === delTarget.attrs.id)
   const delProposal = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: delJob.id, type: 'replace', blockId: delBlock.id, blockRevision: delBlock.revision, before: delBlock.text, after: '', explanation: 'redundant' } })).content[0].text)
@@ -178,11 +180,11 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.click(`.suggestion-host[data-proposal="${delProposal.id}"] button:has-text("Remove")`)
   await until(async () => !(await page.locator('.tiptap').textContent()).includes('[tk: Find a primary source'))
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
-  assert.equal((await request('/api/state')).data.document.json.content.some(n => n.attrs?.id === delTarget.attrs.id), false)
+  assert.equal((await state()).document.json.content.some(n => n.attrs?.id === delTarget.attrs.id), false)
 
   // Comments: the agent responds in place without editing; the writer replies and the thread continues
-  const cmtTarget = (await request('/api/state')).data.document.json.content.find(n => n.type === 'paragraph')
-  const { data: cmtJob } = await request('/api/jobs', { instruction: 'Is this true?', blockIds: [cmtTarget.attrs.id], sessionId: (await request('/api/state')).data.sessions[0].id })
+  const cmtTarget = (await state()).document.json.content.find(n => n.type === 'paragraph')
+  const { data: cmtJob } = await doc('jobs', { instruction: 'Is this true?', blockIds: [cmtTarget.attrs.id], sessionId: (await state()).sessions[0].id })
   await client.callTool({ name: 'claim_job', arguments: { jobId: cmtJob.id } })
   const cmt = JSON.parse((await client.callTool({ name: 'propose_changes', arguments: { jobId: cmtJob.id, type: 'comment', blockId: cmtTarget.attrs.id, text: 'Mostly. See **Kleppmann 2019** for the nuance.' } })).content[0].text)
   await page.waitForSelector(`.suggestion-host[data-proposal="${cmt.id}"] .suggestion.comment`)
@@ -254,7 +256,7 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await page.click('.context-menu button:has-text("Proofread this")')
   const tableEvent = await until(() => notifications.find(n => /Proofread this table/.test(n.content)))
   assert.match(tableEvent.content, /whole table/)
-  const tableJob = (await request('/api/state')).data.jobs.find(j => j.id === tableEvent.meta.job_id)
+  const tableJob = (await state()).jobs.find(j => j.id === tableEvent.meta.job_id)
   assert.ok(tableJob.blockIds.length >= 5, 'table proofreading covers the table and every cell in one job')
   const tableClaim = JSON.parse((await client.callTool({ name: 'claim_job', arguments: { jobId: tableEvent.meta.job_id } })).content[0].text)
   await page.waitForSelector('.tiptap .tableWrapper.agent-active')
@@ -280,15 +282,15 @@ test('writer and agent collaborate end to end in the browser', async t => {
   // Off-screen marker: with a suggestion far below the viewport, a pill appears at the bottom
   await page.setViewportSize({ width: 1440, height: 560 })
   await page.evaluate(() => window.scrollTo(0, 0))
-  const lastId = (await request('/api/state')).data.document.json.content.filter(n => n.type === 'paragraph' && n.content?.length).at(-1).attrs.id
-  await request('/api/demo', { blockId: lastId })
+  const lastId = (await state()).document.json.content.filter(n => n.type === 'paragraph' && n.content?.length).at(-1).attrs.id
+  await doc('demo', { blockId: lastId })
   await page.waitForSelector('.offscreen-bottom .offscreen-pill')
   await shot('offscreen-pill')
   await page.click('.offscreen-bottom .offscreen-pill')
   await until(async () => (await page.locator('.offscreen-bottom .offscreen-pill').count()) === 0)
   await page.setViewportSize({ width: 1440, height: 940 })
 
-  // Images parse from Markdown. Import now creates a new document and opens it (the shim seeds the old server's one document).
+  // Images parse from Markdown. Import creates a new document from the file and opens it.
   await page.setInputFiles('input[type=file]', { name: 'img.md', mimeType: 'text/markdown', buffer: Buffer.from('# Pictures\n\n![A dot](data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)\n\nAfter the image.\n') })
   await page.waitForSelector('.tiptap img:not(.ProseMirror-separator)')
   assert.equal(await page.getAttribute('.tiptap img:not(.ProseMirror-separator)', 'alt'), 'A dot')
@@ -321,7 +323,7 @@ test('writer and agent collaborate end to end in the browser', async t => {
   // Tuning via front matter: the theme picker writes it, and the diagram re-renders
   await page.hover('.mermaid-preview')
   await page.selectOption('.diagram-tuning select[aria-label="Theme"]', 'forest')
-  await until(async () => (await (await request('/api/state')).data.document.json.content.find(n => n.type === 'codeBlock')).content[0].text.startsWith('---\nconfig:\n  theme: forest'))
+  await until(async () => (await (await state()).document.json.content.find(n => n.type === 'codeBlock')).content[0].text.startsWith('---\nconfig:\n  theme: forest'))
   await page.waitForSelector('.mermaid-preview svg', { timeout: 20000 })
 
   // Ask Claude about the diagram from its own button; the agent replaces the source and the card previews the new diagram

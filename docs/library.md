@@ -121,7 +121,7 @@ Auth and config
 Library
 - `GET /api/library` → `{ folders: ['/', '/projects', …], documents: [{ id, title, folder, slug, tags, wordCount, updatedAt, updatedBy }] }` (not deleted, sorted by folder then title).
 - `POST /api/documents { title?, folder?, markdown?, tags? }` → document summary. `markdown` may carry front matter which wins over the other fields.
-- `GET /api/documents/:id` → `{ id, title, folder, slug, tags, frontmatter, revision, updatedAt, updatedBy, owner, related: [{ id, title, folder, sharedTags }], links: { out: [...], in: [...] } }`.
+- `GET /api/documents/:id` → `{ id, title, folder, slug, tags, frontmatter, revision, updatedAt, updatedBy, owner, related: [{ id, title, folder, sharedTags: ['tag', …] }], links: { out: [...], in: [...] } }` (`related` is sorted by the number of shared tags).
 - `PATCH /api/documents/:id { title?, folder?, tags?, frontmatter? }` → summary. Renames update `slug`; folder moves update `folder`.
 - `DELETE /api/documents/:id` → soft delete (sets `deleted_at`). `POST /api/documents/:id/restore`.
 - `GET /api/documents/:id/export.md` → Markdown with front matter (download).

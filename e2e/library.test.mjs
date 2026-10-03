@@ -1,20 +1,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import { startServer, until } from '../server/test-helpers.mjs'
-import { createMockApi } from './mock-api.mjs'
 
-// The library UI against a faithful in-memory implementation of docs/library.md. The old server only serves the
-// built app here; every /api call is answered by the mock. Once the new server lands, run the same flows with
-// AUTH_DEV_USER set and drop the mock.
+// The library UI against the real server (AUTH_DEV_USER, the test Postgres and SeaweedFS). Fixtures are seeded through
+// POST /api/documents with Markdown and front matter; the catalogue is read back through the same API the app uses.
 const shots = process.env.E2E_SHOTS
+const dist = new URL('../dist/', import.meta.url).pathname
 
 test('library: sign-in, routing, tree, search, tags, properties, wikilinks, switching, import/export, tokens, theme', async t => {
-  const { url } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
-  const mock = createMockApi({ devUser: 'andy@example.com' })
-  const lab = mock.create({ title: 'Lab notes', folder: '/projects/lab', tags: ['lab', 'k3s'], markdown: '# Lab notes\n\nThe attic cluster runs the observability stack. See [[Reading list]] for sources.\n\nA second paragraph about Postgres and SeaweedFS storage.\n' })
-  const reading = mock.create({ title: 'Reading list', folder: '/', tags: ['reading', 'lab'], markdown: '# Reading list\n\nLocal-first software by Kleppmann and colleagues.\n' })
-  mock.create({ title: 'Scratch', folder: '/projects', markdown: 'Loose thoughts.\n' })
+  const { url, request, createDocument } = await startServer(t, { STATIC_DIR: dist, AUTH_DEV_USER: 'andy@example.com' })
+  const lab = await createDocument({ title: 'Lab notes', folder: '/projects/lab', tags: ['lab', 'k3s'], markdown: '# Lab notes\n\nThe attic cluster runs the observability stack. See [[Reading list]] for sources.\n\nA second paragraph about Postgres and SeaweedFS storage.\n' })
+  const reading = await createDocument({ title: 'Reading list', folder: '/', tags: ['reading', 'lab'], markdown: '# Reading list\n\nLocal-first software by Kleppmann and colleagues.\n' })
+  await createDocument({ title: 'Scratch', folder: '/projects', markdown: 'Loose thoughts.\n' })
+  const detail = async id => (await request(`/api/documents/${id}`)).data
+  const body = async id => (await request(`/api/documents/${id}/export.md`)).data
+  const library = async () => (await request('/api/library')).data
+  const titled = async title => (await library()).documents.find(d => d.title === title)
 
   const browser = await chromium.launch()
   t.after(() => browser.close())
@@ -22,7 +25,6 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
-  await mock.install(page)
   const shot = name => shots ? page.screenshot({ path: `${shots}/${name}.png` }) : Promise.resolve()
   const saved = () => until(async () => (await page.textContent('.save-state')) === 'Saved')
   const editorText = () => page.locator('.tiptap').textContent()
@@ -53,25 +55,25 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   await page.waitForSelector(`.tiptap a.wikilink.resolved[data-doc="${reading.id}"]`)
   assert.match(await page.locator('.related').textContent(), /Related.*Reading list/, 'shared tag shows as related')
 
-  // Typing then switching flushes the pending sync before the next document loads
+  // Typing then switching flushes the pending sync before the next document loads; the sync indexes the wikilink as a backlink
   await page.click('.tiptap > p:nth-of-type(1)')
   await page.keyboard.press('End')
   await page.keyboard.type(' Edited before switching.')
   await page.click(`.tiptap a.wikilink.resolved[data-doc="${reading.id}"]`, { modifiers: ['Control'] })
   await until(() => page.url().endsWith('/d/' + reading.id))
   await page.waitForSelector('.tiptap:has-text("Local-first")')
-  await until(() => /Edited before switching/.test(mock.doc(lab.id).bodyText))
+  await until(async () => /Edited before switching/.test(await body(lab.id)))
   await saved()
-  await until(async () => /Linked from.*Lab notes/.test(await page.locator('.related').textContent())).catch(async () => { throw new Error('backlinks appear on the target: related=' + await page.locator('.related').textContent() + ' links=' + JSON.stringify(mock.detail(mock.doc(reading.id)).links) + ' pages=' + context.pages().length + ' url=' + page.url() + ' title=' + await page.inputValue('input[aria-label="Document title"]') + ' log=' + mock.db.log.filter(l => !/state|library|tags$/.test(l)).slice(-14).join(',')) })
+  await until(async () => /Linked from.*Lab notes/.test(await page.locator('.related').textContent())).catch(async () => { throw new Error('backlinks appear on the target: related=' + await page.locator('.related').textContent() + ' links=' + JSON.stringify((await detail(reading.id)).links) + ' url=' + page.url()) })
 
   // Tag chips: Enter adds, Backspace removes; the tag cloud links to /tags/:tag
   await page.fill('input[aria-label="Add tag"]', 'Notes!')
   await page.keyboard.press('Enter')
-  await until(() => mock.doc(reading.id).tags.includes('notes'))
+  await until(async () => (await detail(reading.id)).tags.includes('notes'))
   await until(async () => (await page.locator('.tag-input .tag-chip').allTextContents()).join() === 'reading,lab,notes')
   await page.focus('input[aria-label="Add tag"]')
   await page.keyboard.press('Backspace')
-  await until(() => !mock.doc(reading.id).tags.includes('notes'))
+  await until(async () => !(await detail(reading.id)).tags.includes('notes'))
   await until(async () => (await page.locator('.tag-input .tag-chip').allTextContents()).join() === 'reading,lab')
   await page.click('.tag-cloud .tag-chip:has-text("lab")')
   await until(() => page.url().includes('/tags/lab'))
@@ -101,7 +103,7 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   // Title edits PATCH the catalogue and the tree follows
   await page.fill('input[aria-label="Document title"]', 'Lab notebook')
   await page.keyboard.press('Enter')
-  await until(() => mock.doc(lab.id).title === 'Lab notebook')
+  await until(async () => (await detail(lab.id)).title === 'Lab notebook')
   await until(async () => (await page.locator('.tree-row.current .tree-name').textContent()) === 'Lab notebook')
 
   // Properties: invalid YAML is flagged, a valid edit saves front matter and the derived tags
@@ -112,8 +114,8 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   assert.equal(await page.locator('.properties-body .primary').isDisabled(), true)
   await page.fill('textarea[aria-label="Front matter (YAML)"]', 'title: Lab notebook\ntags:\n  - lab\n  - storage\nfolder: /projects/lab\naliases:\n  - LN\nstatus: draft\n')
   await page.click('.properties-body .primary')
-  await until(() => mock.doc(lab.id).frontmatter.status === 'draft')
-  assert.deepEqual(mock.doc(lab.id).tags, ['lab', 'storage'])
+  await until(async () => (await detail(lab.id)).frontmatter.status === 'draft')
+  assert.deepEqual((await detail(lab.id)).tags, ['lab', 'storage'])
   await until(async () => (await page.locator('.tag-input .tag-chip').allTextContents()).join() === 'lab,storage')
   assert.match(await page.locator('.properties summary').textContent(), /aliases, status/)
   await shot('properties')
@@ -123,7 +125,7 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   await page.waitForSelector('dialog.dialog[open]')
   await page.click('.folder-option:has-text("/projects")')
   await page.click('dialog .primary:has-text("Move here")')
-  await until(() => mock.doc(lab.id).folder === '/projects')
+  await until(async () => (await detail(lab.id)).folder === '/projects')
   await until(async () => (await page.locator('.breadcrumb .crumb').allTextContents()).map(s => s.trim()).join('/') === 'Library/projects')
 
   // New document, rename from the tree menu, delete with undo
@@ -132,25 +134,25 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   const fresh = page.url().split('/d/')[1]
   await page.waitForSelector('.tiptap')
   await saved()
-  assert.equal(mock.doc(fresh).folder, '/projects', 'created in the current folder')
+  assert.equal((await detail(fresh)).folder, '/projects', 'created in the current folder')
   await page.click('.tiptap')
   await page.keyboard.type('Fresh words.')
   await saved()
-  await until(() => /Fresh words/.test(mock.doc(fresh).bodyText))
+  await until(async () => /Fresh words/.test(await body(fresh)))
   await page.hover('.tree-row.current')
   await page.click('.tree-row.current .tree-more')
   await page.click('.context-menu button:has-text("Rename")')
   await page.fill('dialog input[aria-label="Title"]', 'Renamed draft')
   await page.keyboard.press('Enter')
-  await until(() => mock.doc(fresh).title === 'Renamed draft')
+  await until(async () => (await detail(fresh)).title === 'Renamed draft')
   await until(async () => (await page.inputValue('input[aria-label="Document title"]')) === 'Renamed draft')
   await page.hover('.tree-row.current')
   await page.click('.tree-row.current .tree-more')
   await page.click('.context-menu button:has-text("Delete")')
-  await until(() => mock.doc(fresh).deletedAt)
+  await until(async () => (await detail(fresh)).deletedAt)
   await page.waitForSelector('[data-sonner-toast] button:has-text("Undo")')
   await page.click('[data-sonner-toast] button:has-text("Undo")')
-  await until(() => !mock.doc(fresh).deletedAt)
+  await until(async () => !(await detail(fresh)).deletedAt)
   await until(() => page.url().endsWith('/d/' + fresh))
   await page.waitForSelector('.tree-row.current .tree-name:has-text("Renamed draft")')
 
@@ -164,19 +166,19 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   await until(async () => (await page.locator('.suggestion').count()) === 0)
   await until(async () => (await page.locator('.tiptap blockquote').count()) === 1)
   await saved()
-  assert.match(mock.doc(fresh).bodyText, /local test suggestion/)
+  assert.match(await body(fresh), /local test suggestion/)
 
   // Import creates a new document from Markdown with front matter; export downloads the server's Markdown
   await page.setInputFiles('input[type=file]', { name: 'imported.md', mimeType: 'text/markdown', buffer: Buffer.from('---\ntitle: Imported plan\ntags: [plan]\n---\n\n# Imported plan\n\nStep one.\n') })
-  await until(() => page.url().match(/\/d\//) && mock.library().documents.some(d => d.title === 'Imported plan') && page.url().endsWith(mock.library().documents.find(d => d.title === 'Imported plan').id))
+  await until(async () => { const imported = await titled('Imported plan'); return imported && page.url().endsWith('/d/' + imported.id) })
   await page.waitForSelector('.tiptap:has-text("Step one")')
   await saved()
   await until(async () => (await page.inputValue('input[aria-label="Document title"]')) === 'Imported plan')
   await until(async () => (await page.locator('.tag-input .tag-chip').allTextContents()).join() === 'plan')
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('.header-actions button:has-text("Export")')])
   assert.equal(download.suggestedFilename(), 'Imported plan.md')
-  const exported = await (await import('node:fs/promises')).readFile(await download.path(), 'utf8')
-  assert.match(exported, /^---\ntitle: Imported plan\ntags: \[plan\]/)
+  const exported = await readFile(await download.path(), 'utf8')
+  assert.match(exported, /^---\ntitle: Imported plan\ntags:\n  - plan\n/)
   assert.match(exported, /Step one/)
 
   // Agent access tokens: create (shown once with the ready-to-paste command), list, revoke
@@ -188,14 +190,15 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   await page.click('.token-form .primary')
   await page.waitForSelector('[data-testid="fresh-token"]')
   const token = await page.textContent('[data-testid="fresh-token"]')
-  assert.match(token, /^ndp_[0-9a-f]{32}$/)
+  assert.match(token, /^ndp_[A-Za-z0-9_-]{40}$/)
   assert.match(await page.locator('pre.command').textContent(), new RegExp(`claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} --token ${token}`))
   await until(async () => (await page.locator('.token-table tbody tr').count()) === 1)
+  assert.equal((await request('/api/tokens')).data.length, 1)
   await shot('tokens')
   await page.evaluate(() => { window.confirm = () => true })
   await page.click('.token-table button:has-text("Revoke")')
   await until(async () => (await page.locator('.token-table tbody tr').count()) === 0)
-  assert.ok(mock.db.tokens[0].revokedAt)
+  assert.equal((await request('/api/tokens')).data.length, 0, 'revoked tokens leave the list')
 
   // Theme: the user menu switches to dark, the choice persists across reloads, and brand goes back to the document
   await page.click('.avatar')
@@ -225,7 +228,7 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   // The last opened document is remembered for /
   await page.goto(url + '/')
   await page.waitForSelector('.tiptap')
-  await until(() => page.url().endsWith(mock.library().documents.find(d => d.title === 'Imported plan').id))
+  await until(async () => page.url().endsWith('/d/' + (await titled('Imported plan')).id))
 
   // Sign out in dev mode just returns to the root
   await page.click('.avatar')
@@ -235,17 +238,19 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
 })
 
 test('library: an empty library offers to start a document', async t => {
-  const { url } = await startServer(t, { STATIC_DIR: new URL('../dist/', import.meta.url).pathname })
-  const mock = createMockApi()
+  const { url, request } = await startServer(t, { STATIC_DIR: dist })
   const browser = await chromium.launch()
   t.after(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
-  await mock.install(page)
   await page.goto(url + '/')
   await page.waitForSelector('.empty-card')
   await page.click('.empty-card .primary')
   await page.waitForSelector('.tiptap')
   await until(() => page.url().match(/\/d\/[0-9a-f-]{36}$/))
-  assert.equal(mock.library().documents.length, 1)
+  await until(async () => (await page.textContent('.save-state')) === 'Saved')
+  const { documents } = (await request('/api/library')).data
+  assert.equal(documents.length, 1)
+  assert.equal(documents[0].title, 'Working notes')
   assert.equal(await page.inputValue('input[aria-label="Document title"]'), 'Working notes')
+  assert.match(await page.locator('.tiptap').textContent(), /Write with your Claude session/, 'the first document gets the welcome text')
 })

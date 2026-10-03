@@ -137,8 +137,8 @@ export class Db {
   async tags() { return this.query('select tag, count(*)::int as count from documents, unnest(tags) as tag where deleted_at is null group by tag order by count desc, tag') }
   async byTag(tag) { return (await this.query('select * from documents where deleted_at is null and $1 = any(tags) order by folder, lower(title)', [normaliseTag(tag)])).map(row) }
   async related(id, limit = 10) {
-    return this.query(`select d.id, d.title, d.folder, (select count(*)::int from unnest(d.tags) t where t = any(s.tags)) as "sharedTags"
-      from documents d, documents s where s.id = $1 and d.id <> s.id and d.deleted_at is null and d.tags && s.tags order by "sharedTags" desc, d.updated_at desc limit $2`, [id, limit])
+    return this.query(`select d.id, d.title, d.folder, array(select t from unnest(d.tags) t where t = any(s.tags)) as "sharedTags"
+      from documents d, documents s where s.id = $1 and d.id <> s.id and d.deleted_at is null and d.tags && s.tags order by cardinality(array(select t from unnest(d.tags) t where t = any(s.tags))) desc, d.updated_at desc limit $2`, [id, limit])
   }
   async setLinks(fromId, links) {
     const client = await this.pool.connect()
