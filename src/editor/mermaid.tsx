@@ -10,10 +10,25 @@ function loadMermaid() {
   mermaidModule ??= Promise.all([import('mermaid'), import('@mermaid-js/layout-elk'), import('@mermaid-js/layout-tidy-tree')]).then(([m, elk, tidy]) => {
     m.default.registerLayoutLoaders(elk.default)
     m.default.registerLayoutLoaders(tidy.default)
-    m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', fontFamily: '"Noto Sans", sans-serif', fontSize: 15, flowchart: { padding: 12, nodeSpacing: 40, rankSpacing: 50 } })
+    m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', fontFamily: '"Inter", system-ui, sans-serif', fontSize: 15, flowchart: { padding: 12, nodeSpacing: 40, rankSpacing: 50 } })
     return m.default
   })
   return mermaidModule
+}
+
+// Diagrams without an explicit theme follow the app theme: neutral in light mode, Mermaid's dark theme in dark mode.
+function useDarkMode() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'))
+  useEffect(() => {
+    const observer = new MutationObserver(() => setDark(document.documentElement.classList.contains('dark')))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
+  return dark
+}
+function themedSource(source: string) {
+  if (!document.documentElement.classList.contains('dark') || readFrontmatter(source).config.theme) return source
+  return writeFrontmatter(source, { ...readFrontmatter(source).config, theme: 'dark' })
 }
 
 // Per-diagram tuning lives in Mermaid's YAML front matter. These helpers read and rewrite it.
@@ -46,6 +61,7 @@ let counter = 0
 
 export function MermaidPreview({ source, onAsk }: { source: string; onAsk?: () => void }) {
   const [svg, setSvg] = useState('')
+  const dark = useDarkMode()
   const [error, setError] = useState('')
   const id = useRef('mermaid-' + (++counter))
   const host = useRef<HTMLDivElement>(null)
@@ -64,7 +80,7 @@ export function MermaidPreview({ source, onAsk }: { source: string; onAsk?: () =
     const timer = setTimeout(async () => {
       try {
         const mermaid = await loadMermaid()
-        const result = await mermaid.render(id.current + '-' + Date.now().toString(36), source)
+        const result = await mermaid.render(id.current + '-' + Date.now().toString(36), themedSource(source))
         if (!cancelled) { setSvg(result.svg); setError('') }
       } catch (e) {
         const message = (e as Error).message ?? ''
@@ -74,7 +90,7 @@ export function MermaidPreview({ source, onAsk }: { source: string; onAsk?: () =
       }
     }, 350)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [source])
+  }, [source, dark])
   const [expanded, setExpanded] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { const d = dialog.current; if (!d) return; if (expanded && !d.open) d.showModal(); if (!expanded && d.open) d.close() }, [expanded])

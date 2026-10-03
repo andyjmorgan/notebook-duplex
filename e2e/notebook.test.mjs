@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { z } from 'zod'
 import { startServer, until } from '../server/test-helpers.mjs'
+import { installLegacyShim } from './legacy-shim.mjs'
 
 const channel = z.object({ method: z.literal('notifications/claude/channel'), params: z.object({ content: z.string(), meta: z.record(z.string()) }) })
 const shots = process.env.E2E_SHOTS
@@ -18,14 +19,13 @@ test('writer and agent collaborate end to end in the browser', async t => {
   page.on('pageerror', e => errors.push(e.message))
   const shot = name => shots ? page.screenshot({ path: `${shots}/${name}.png` }) : Promise.resolve()
 
+  // TODO(integration): the key gate is gone. Sign-in is Keycloak (or AUTH_DEV_USER); the legacy shim answers /api/config
+  // with a dev user and maps the per-document routes onto the old server until server/index.mjs implements docs/library.md.
+  await installLegacyShim(page, { url, apiKey })
   await page.goto(url + '/')
-  await page.fill('input[aria-label="Notebook key"]', 'wrong')
-  await page.click('button[type=submit]')
-  await page.waitForSelector('.gate-error')
-  await page.fill('input[aria-label="Notebook key"]', apiKey)
-  await page.click('button[type=submit]')
   await page.waitForSelector('.tiptap')
-  await page.evaluate(() => { const w = window; w.__toasts = []; new MutationObserver(() => { const t = document.getElementById('toast')?.textContent; if (t) w.__toasts.push(t) }).observe(document.getElementById('toast'), { childList: true, characterData: true, subtree: true }) })
+  await until(() => /\/d\//.test(page.url()))
+  await page.evaluate(() => { const w = window; w.__toasts = []; new MutationObserver(() => { for (const el of document.querySelectorAll('[data-sonner-toast]')) { const t = el.textContent; if (t && w.__toasts[w.__toasts.length - 1] !== t) w.__toasts.push(t) } }).observe(document.body, { childList: true, characterData: true, subtree: true }) })
   const toasts = () => page.evaluate(() => window.__toasts)
   await until(async () => (await page.textContent('.save-state')) === 'Saved')
   const initial = (await request('/api/state')).data
@@ -288,8 +288,7 @@ test('writer and agent collaborate end to end in the browser', async t => {
   await until(async () => (await page.locator('.offscreen-bottom .offscreen-pill').count()) === 0)
   await page.setViewportSize({ width: 1440, height: 940 })
 
-  // Images parse from Markdown
-  await page.evaluate(() => { const w = window; w.confirm = () => true })
+  // Images parse from Markdown. Import now creates a new document and opens it (the shim seeds the old server's one document).
   await page.setInputFiles('input[type=file]', { name: 'img.md', mimeType: 'text/markdown', buffer: Buffer.from('# Pictures\n\n![A dot](data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)\n\nAfter the image.\n') })
   await page.waitForSelector('.tiptap img:not(.ProseMirror-separator)')
   assert.equal(await page.getAttribute('.tiptap img:not(.ProseMirror-separator)', 'alt'), 'A dot')

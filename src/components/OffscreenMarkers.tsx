@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type React from 'react'
+import type React from "react"
+import { ArrowDown, ArrowUp } from "lucide-react"
 
 export type Marker = { id: string; kind: 'review' | 'working'; element: HTMLElement | null }
 type Side = { review: number; working: number; nearest?: HTMLElement }
@@ -34,10 +35,10 @@ export function OffscreenMarkers({ markers, tick, container }: { markers: Marker
   return (
     <>
       <div className="offscreen offscreen-top" aria-live="polite" style={{ left: center }}>
-        {show(sides.above) && <button className={`offscreen-pill ${sides.above.review ? 'review' : 'working'}`} onClick={() => go(sides.above.nearest)}>↑ {label(sides.above)}</button>}
+        {show(sides.above) && <button className={`offscreen-pill ${sides.above.review ? "review" : "working"}`} onClick={() => go(sides.above.nearest)}><ArrowUp size={14} aria-hidden /> {label(sides.above)}</button>}
       </div>
       <div className="offscreen offscreen-bottom" style={{ left: center }}>
-        {show(sides.below) && <button className={`offscreen-pill ${sides.below.review ? 'review' : 'working'}`} onClick={() => go(sides.below.nearest)}>↓ {label(sides.below)}</button>}
+        {show(sides.below) && <button className={`offscreen-pill ${sides.below.review ? "review" : "working"}`} onClick={() => go(sides.below.nearest)}><ArrowDown size={14} aria-hidden /> {label(sides.below)}</button>}
       </div>
     </>
   )

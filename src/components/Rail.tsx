@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { ArrowUpRight, Check, KeyRound, Square, X } from 'lucide-react'
 import type { Activity, Job, Proposal, Session } from '../types'
 
 export type HeldRequest = { id: string; instruction: string; blockIds: string[]; sessionId: string; context?: Record<string, unknown> }
@@ -6,7 +7,7 @@ export type HeldRequest = { id: string; instruction: string; blockIds: string[];
 type Props = {
   sessions: Session[]; sessionId: string; onSession: (id: string) => void
   jobs: Job[]; activity: Activity[]; proposals: Proposal[]
-  mcpUrl: string; apiKey: string
+  mcpUrl: string
   proofread: boolean; onProofread: (on: boolean) => void
   onDemo: () => void; onCancel: (id: string) => Promise<void>; onLocate: (proposal: Proposal) => void; onAcceptAll: () => Promise<void>; onRejectAll: () => Promise<void>; busy: boolean
   onNotify: (message: string) => void
@@ -16,8 +17,7 @@ const active = (j: Job) => ['queued', 'running', 'needs_permission'].includes(j.
 const stateVerb: Record<string, string> = { reading: 'Reading', thinking: 'Thinking', writing: 'Writing', waiting: 'Waiting on you', done: 'Finishing' }
 const statusLabel: Record<string, string> = { queued: 'Queued', needs_permission: 'Needs permission in Claude\'s terminal', abandoned: 'Abandoned' }
 
-export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, apiKey, proofread, onProofread, onDemo, onCancel, onLocate, onAcceptAll, onRejectAll, busy, onNotify, reading, held, onStopReading }: Props) {
-  const [showKey, setShowKey] = useState(false)
+export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals, mcpUrl, proofread, onProofread, onDemo, onCancel, onLocate, onAcceptAll, onRejectAll, busy, onNotify, reading, held, onStopReading }: Props) {
   const connected = sessions.filter(s => s.connected)
   const current = connected.find(s => s.id === sessionId)
   const live = jobs.filter(active)
@@ -25,7 +25,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
   const pending = proposals.filter(p => p.status === 'pending')
   const acceptable = pending.filter(p => !p.stale && p.type !== 'comment')
   const origin = mcpUrl.replace(/\/mcp$/, '')
-  const command = `claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${origin} --key ${showKey ? apiKey : '<notebook key>'}`
+  const command = `claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${origin} --token <your access token>`
   const copy = async (text: string, label: string) => { try { await navigator.clipboard.writeText(text); onNotify(label) } catch { onNotify('Copy failed. Select the text instead.') } }
   return (
     <aside className="rail" aria-label="Collaboration">
@@ -40,7 +40,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
             <p className="repo">{current?.repo || 'Working directory not reported yet'}</p>
           </>
         ) : (
-          <p className="rail-muted">No Claude session connected. Open <strong>Connect</strong> below to add this notebook to a session.</p>
+          <p className="rail-muted">No Claude session connected. Open <strong>Connect</strong> below to add this library to a session.</p>
         )}
         <label className="proofreading" title={reading ? 'Paused while the document is being read aloud.' : undefined}><input type="checkbox" checked={proofread} disabled={!connected.length || reading} onChange={e => onProofread(e.target.checked)} /> Proofread settled paragraphs <span className="beta">EXPERIMENTAL</span></label>
       </section>
@@ -50,7 +50,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
           <div className="section-label"><span>Reading aloud</span>{held.length > 0 && <span>{held.length}</span>}</div>
           <p className="rail-muted small">{held.length ? `${held.length} ${held.length === 1 ? 'request' : 'requests'} held until you stop reading.` : 'Claude waits while you listen. Asks you make now are held and sent when you stop.'}</p>
           {held.map(h => <div key={h.id} className="recent held-item"><span className="job-status queued">held</span><span>{h.instruction.split('\n')[0]}</span></div>)}
-          {reading && <button className="quiet small stop-reading" onClick={onStopReading}>{held.length ? 'Stop reading and send' : 'Stop reading'}</button>}
+          {reading && <button className="quiet small stop-reading" onClick={onStopReading}><Square size={12} aria-hidden /> {held.length ? 'Stop reading and send' : 'Stop reading'}</button>}
         </section>
       )}
 
@@ -65,7 +65,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
                 <span className={`job-status ${j.status}`}>{j.status === 'needs_permission' ? statusLabel.needs_permission : a ? stateVerb[a.state] : statusLabel[j.status] ?? j.status.replace('_', ' ')}</span>
                 {!alive && <span className="proofread-tag" title="The session that took this job is no longer connected. A session with the same name will pick it up; otherwise it expires.">session offline</span>}
                 {j.kind === 'proofread' && <span className="proofread-tag">proofread</span>}
-                <button className="quiet cancel" onClick={() => void onCancel(j.id)}>Cancel</button>
+                <button className="quiet cancel" onClick={() => void onCancel(j.id)}><X size={12} aria-hidden /> Cancel</button>
               </div>
               <p>{j.instruction.split('\n')[0]}</p>
               {a?.message && <small>{a.message}</small>}
@@ -78,12 +78,12 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
       </section>
 
       <section className="rail-section">
-        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy || reading} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone.">Accept all {acceptable.length}</button>}{pending.length > 1 && <button className="quiet small reject-all" disabled={busy || reading} onClick={() => void onRejectAll()} title="Dismiss every pending suggestion and comment, including stale ones.">Reject all</button>}<span>{pending.length}</span></span></div>
+        <div className="section-label"><span>To review</span><span className="label-actions">{acceptable.length > 1 && <button className="quiet small accept-all" disabled={busy || reading} onClick={() => void onAcceptAll()} title="Accept every pending suggestion in document order. Comments and stale suggestions are left alone."><Check size={12} aria-hidden /> Accept all {acceptable.length}</button>}{pending.length > 1 && <button className="quiet small reject-all" disabled={busy || reading} onClick={() => void onRejectAll()} title="Dismiss every pending suggestion and comment, including stale ones.">Reject all</button>}<span>{pending.length}</span></span></div>
         {pending.length ? pending.map(p => (
           <button key={p.id} className="review-link" onClick={() => onLocate(p)}>
             <span className={`review-dot ${p.stale ? 'stale' : p.type}`} />
             <span className="review-text">{p.type === 'comment' ? 'Comment · ' : p.stale ? 'Changed · ' : p.type === 'insert' ? 'Addition · ' : p.type === 'move' ? 'Move · ' : p.type === 'replace_text' ? `Replace ${p.count}× · ` : 'Edit · '}{(p.type === 'replace_text' ? `${p.find} → ${p.replace}` : p.text || p.explanation || p.after || p.markdown || p.preview?.[0] || '').split('\n')[0]}</span>
-            <span className="review-go">↗</span>
+            <span className="review-go"><ArrowUpRight size={13} aria-hidden /></span>
           </button>
         )) : <p className="rail-muted small">Suggestions appear inside the document, right where they apply.</p>}
       </section>
@@ -97,11 +97,11 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
 
       <details className="setup">
         <summary>Connect a Claude session</summary>
-        <p>Claude Code channels run as a local stdio process. Clone the repo once, register its <code>agent/channel.mjs</code> shim (it proxies to this server), then launch with the channel enabled:</p>
+        <p>Claude Code channels run as a local stdio process. Create a personal access token, clone the repo once, register its <code>agent/channel.mjs</code> shim (it proxies to this server), then launch with the channel enabled:</p>
         <pre><code>{command}{'\n'}claude --dangerously-load-development-channels server:notebook-duplex</code></pre>
         <div className="setup-actions">
-          <button className="quiet small" onClick={() => copy(command.replace('<notebook key>', apiKey) + '\nclaude --dangerously-load-development-channels server:notebook-duplex', 'Commands copied with your key. Replace <checkout> with your clone path.')}>Copy with key</button>
-          <button className="quiet small ghost" onClick={() => setShowKey(v => !v)}>{showKey ? 'Hide key' : 'Show key'}</button>
+          <Link className="primary small" to="/settings/tokens"><KeyRound size={13} aria-hidden /> Agent access tokens</Link>
+          <button className="quiet small" onClick={() => copy(command + '\nclaude --dangerously-load-development-channels server:notebook-duplex', 'Commands copied. Paste your token and replace <checkout> with your clone path.')}>Copy commands</button>
         </div>
         <p>Claude proposes; only you accept. Tool permissions stay in Claude's terminal.</p>
       </details>

@@ -6,3 +6,4 @@ dist/
 .env.*
 *.log
 authorized_tokens.json
+.claude/
