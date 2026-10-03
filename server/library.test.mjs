@@ -37,9 +37,9 @@ test('migrations are idempotent', async () => {
   const backend = await freshBackend()
   const db = new Db(backend.databaseUrl)
   try {
-    assert.equal(await db.migrate(), 1)
-    assert.equal(await db.migrate(), 1)
-    assert.equal((await db.query('select count(*)::int as n from schema_migrations'))[0].n, 1)
+    assert.equal(await db.migrate(), 2)
+    assert.equal(await db.migrate(), 2)
+    assert.equal((await db.query('select count(*)::int as n from schema_migrations'))[0].n, 2)
     assert.equal((await db.query("select count(*)::int as n from information_schema.tables where table_name in ('users','documents','folders','links','access_tokens','revisions')"))[0].n, 6)
     const doc = await db.createDocument({ title: 'Same name' })
     const twin = await db.createDocument({ title: 'Same name' })

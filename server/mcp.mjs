@@ -48,7 +48,7 @@ A job scoped to a table cell may also be answered with a replace on the whole ta
 export function createMcpServer(session, library, user) {
   const mcp = new Server({ name: 'notebook-duplex', version: '0.3.0' }, { capabilities: { tools: {}, experimental: { 'claude/channel': {} } }, instructions })
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }))
-  const forJob = async args => { const store = await library.storeForJob(args.jobId, args.documentId); return { store, id: store.state.document.id } }
+  const forJob = async args => { const store = await library.storeForJob(args.jobId, args.documentId, user); return { store, id: store.state.document.id } }
   mcp.setRequestHandler(CallToolRequestSchema, async req => {
     const args = req.params.arguments ?? {}
     try {
@@ -61,26 +61,26 @@ export function createMcpServer(session, library, user) {
           result = { id: session.id, name: session.name, repo: session.repo, user: user?.name }
           break
         case 'list_jobs':
-          result = { jobs: library.stores().flatMap(({ id, store }) => store.state.jobs.filter(j => (j.sessionId === session.id || store.adoptable(j, session.id)) && ['queued', 'running', 'needs_permission'].includes(j.status)).map(j => ({ id: j.id, documentId: id, documentTitle: store.state.document.title, status: j.status, instruction: j.instruction, blockIds: j.blockIds, orphaned: j.sessionId !== session.id || undefined }))) }
+          result = { jobs: library.stores(user?.sub).flatMap(({ id, store }) => store.state.jobs.filter(j => (j.sessionId === session.id || store.adoptable(j, session.id)) && ['queued', 'running', 'needs_permission'].includes(j.status)).map(j => ({ id: j.id, documentId: id, documentTitle: store.state.document.title, status: j.status, instruction: j.instruction, blockIds: j.blockIds, orphaned: j.sessionId !== session.id || undefined }))) }
           break
         case 'claim_job': { const { store, id } = await forJob(args); result = { ...store.claim(args.jobId, session.id, { full: Boolean(args.full) }), documentId: id, documentTitle: store.state.document.title }; changed = id; break }
         case 'get_blocks': { const { store } = await forJob(args); result = store.blocks(args.jobId, session.id, args.blockIds); break }
         case 'get_document_snapshot':
           if (args.jobId) { const { store } = await forJob(args); result = store.job(args.jobId, session.id).snapshot }
-          else if (args.documentId) result = (await library.open(args.documentId)).snapshot()
+          else if (args.documentId) result = (await library.openFor(args.documentId, user)).snapshot()
           else throw new Error('Pass jobId or documentId')
           break
         case 'set_block_status': { const { store, id } = await forJob(args); result = store.activity(args.jobId, session.id, args); changed = id; break }
         case 'propose_changes': { const { store, id } = await forJob(args); result = store.propose(args, session.id); changed = id; break }
         case 'report_job_status': { const { store, id } = await forJob(args); result = store.status(args.jobId, session.id, args.status, args.message); changed = id; break }
         case 'list_documents': {
-          const { folders, documents } = await library.library()
+          const { folders, documents } = await library.library(user)
           const folder = args.folder ? String(args.folder) : null
           result = folder ? { folder, documents: documents.filter(d => d.folder === folder || d.folder.startsWith(folder.replace(/\/$/, '') + '/')) } : { folders, documents }
           break
         }
-        case 'search_documents': result = { results: await library.search(args.query, { tag: args.tag, limit: args.limit }) }; break
-        case 'get_document': return { content: [{ type: 'text', text: await library.exportMarkdown(args.documentId) }] }
+        case 'search_documents': result = { results: await library.search(args.query, { tag: args.tag, limit: args.limit }, user) }; break
+        case 'get_document': return { content: [{ type: 'text', text: await library.exportMarkdown(args.documentId, user) }] }
         case 'create_document': result = await library.create({ title: args.title, folder: args.folder, markdown: args.markdown }, user); break
         default: throw new Error('Unknown tool')
       }

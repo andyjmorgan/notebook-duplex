@@ -12,7 +12,7 @@ For local development without Keycloak, start the server with `AUTH_DEV_USER=you
 
 ## The library
 
-Every document lives in one shared library. The left column is the library itself:
+Every account has its own private library; nothing is visible to anyone else. The left column is the library itself:
 
 - **Search** with live results as you type (Postgres full text with highlighted snippets); arrow keys and Enter open a result, Enter on the box opens `/search?q=` with everything.
 - **Folder tree** with documents under folders and counts. Folders remember whether you closed them; the current document's folder is always open. Right-click or the row menu offers rename, move to folder, and delete (with Undo in the toast). Folders offer new document, new folder and delete when empty.
@@ -160,7 +160,7 @@ The end-to-end tests run headless Chromium against the built app and the real se
 
 ## Limits
 
-- One shared library per deployment; anyone who can sign in can read and edit every document. Single writer per document: no CRDT or simultaneous editing.
+- Libraries are private: every document and folder belongs to the account that created it, and nothing is shared. Agent tokens act as the account that minted them. There is no sharing feature by design. Single writer per document: no CRDT or simultaneous editing.
 - Replace proposals cover paragraphs, headings and tables. Code blocks and diagrams can be inserted but not rewritten in place yet.
 - Tool permission and trust prompts stay in Claude's terminal. Channels are a Claude Code research preview and need the development-channel flag; organisation policy can disable them.
 - Cancelling a job invalidates late results but does not interrupt Claude's loop. The blocks you point at are the agent's focus, not a boundary: for commands it may change other blocks when the request needs it (moving content into a table, renaming a term everywhere). Automatic proofreading stays inside its scope. After a server restart, a reconnecting session with the same name inherits the previous session's open jobs.

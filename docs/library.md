@@ -4,7 +4,7 @@ Status: being built (October 2026). This document is the contract between the se
 
 ## Decisions
 
-- **One shared library per deployment**, with every document attributed to its creator and last editor. Anyone who can sign in to the Keycloak realm can read and edit everything. Per-user private spaces are a later step; the schema carries `owner` so it is possible.
+- **Private libraries.** Every document and folder belongs to exactly one account (`owner`); all reads, writes, search, tags, links and MCP tools are scoped to the caller. Sharing is deliberately not a feature. Unowned rows from a legacy import go to the sole account at import time, or to the first account that signs in.
 - **Identity is Keycloak** (realm `Agents` at `https://auth.donkeywork.dev`). The web app signs in with OpenID Connect, Authorization Code + PKCE, public client `notebook-duplex`. The server verifies the access token (RS256, issuer `https://auth.donkeywork.dev/realms/Agents`, JWKS fetched from the in-cluster Keycloak address) on every `/api` request. The old static notebook key is gone.
 - **Agent sessions authenticate with a personal access token** minted in the UI (`ndp_…`, shown once, stored hashed). The MCP endpoint and the stdio shim use it. Every job records which user asked.
 - **Documents live in SeaweedFS** (the lab's central S3 on attic, bucket `notebook-duplex`): one object per document holding the editor state (Tiptap JSON plus jobs, proposals and activity), written on every save, plus an archived copy per accepted revision. **Postgres holds the catalogue**: metadata, folder path, front matter, tags, full-text index, links, tokens. Postgres is `pgvector/pgvector:pg17`; an `embedding vector(1024)` column exists but nothing fills it yet.

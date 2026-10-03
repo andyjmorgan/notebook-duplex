@@ -118,9 +118,9 @@ const notFound = () => { throw new HttpError(404, 'Not found') }
 
 // Document editing routes, now per document: /api/d/:id/<action>.
 async function handleDocument(req, id, action, data, user, url) {
-  if (req.method === 'GET' && action === 'state') return { ...(await library.view(id, { lite: url.searchParams.has('lite') })), sessions: sessionView() }
+  if (req.method === 'GET' && action === 'state') return { ...(await library.view(id, { lite: url.searchParams.has('lite') }, user)), sessions: sessionView() }
   if (req.method !== 'POST') notFound()
-  const store = await library.open(id)
+  const store = await library.openFor(id, user)
   let result
   if (action === 'sync') return library.sync(id, data, user)
   else if (action === 'jobs') {
@@ -168,26 +168,26 @@ async function handleApi(req, res, url, user) {
       else if (m === 'GET' && path === '/api/tokens') result = await db.tokens(user.sub)
       else if (m === 'POST' && path === '/api/tokens') result = await auth.mintToken(user.sub, data.name)
       else if (m === 'DELETE' && head === 'tokens' && a && parts.length === 2) { if (!(await db.revokeToken(a, user.sub))) notFound(); result = { ok: true } }
-      else if (m === 'GET' && path === '/api/library') result = await library.library()
+      else if (m === 'GET' && path === '/api/library') result = await library.library(user)
       else if (m === 'POST' && path === '/api/documents') result = await library.create(data, user)
       else if (head === 'documents' && a && parts.length === 2) {
-        if (m === 'GET') result = await library.get(a)
+        if (m === 'GET') result = await library.get(a, user)
         else if (m === 'PATCH') result = await library.patch(a, data, user)
-        else if (m === 'DELETE') result = await library.remove(a)
+        else if (m === 'DELETE') result = await library.remove(a, user)
         else notFound()
       }
-      else if (m === 'POST' && head === 'documents' && a && b === 'restore' && parts.length === 3) result = await library.restore(a)
+      else if (m === 'POST' && head === 'documents' && a && b === 'restore' && parts.length === 3) result = await library.restore(a, user)
       else if (m === 'GET' && head === 'documents' && a && b === 'export.md' && parts.length === 3) {
-        const doc = await db.document(a, { deleted: true }); if (!doc) notFound()
-        const markdown = await library.exportMarkdown(a)
+        const doc = await db.document(a, { deleted: true, owner: user.sub }); if (!doc) notFound()
+        const markdown = await library.exportMarkdown(a, user)
         res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="${doc.slug}.md"`, 'Cache-Control': 'no-store', 'X-Build': buildId })
         return res.end(markdown)
       }
       else if (m === 'POST' && path === '/api/folders') result = { path: await db.createFolder(data.path, user.sub) }
-      else if (m === 'DELETE' && path === '/api/folders') { await db.deleteFolder(url.searchParams.get('path') ?? data.path); result = { ok: true } }
-      else if (m === 'GET' && path === '/api/search') result = { results: await library.search(url.searchParams.get('q'), { folder: url.searchParams.get('folder') || undefined, tag: url.searchParams.get('tag') || undefined, limit: url.searchParams.get('limit') || undefined }) }
-      else if (m === 'GET' && path === '/api/tags') result = await db.tags()
-      else if (m === 'GET' && head === 'tags' && a && parts.length === 2) result = (await db.byTag(a)).map(d => ({ id: d.id, title: d.title, folder: d.folder, slug: d.slug, tags: d.tags, wordCount: d.wordCount, updatedAt: d.updatedAt, updatedBy: d.updatedBy }))
+      else if (m === 'DELETE' && path === '/api/folders') { await db.deleteFolder(url.searchParams.get('path') ?? data.path, user.sub); result = { ok: true } }
+      else if (m === 'GET' && path === '/api/search') result = { results: await library.search(url.searchParams.get('q'), { folder: url.searchParams.get('folder') || undefined, tag: url.searchParams.get('tag') || undefined, limit: url.searchParams.get('limit') || undefined }, user) }
+      else if (m === 'GET' && path === '/api/tags') result = await db.tags(user.sub)
+      else if (m === 'GET' && head === 'tags' && a && parts.length === 2) result = (await db.byTag(a, user.sub)).map(d => ({ id: d.id, title: d.title, folder: d.folder, slug: d.slug, tags: d.tags, wordCount: d.wordCount, updatedAt: d.updatedAt, updatedBy: d.updatedBy }))
       else notFound()
       json(res, 200, result)
     } catch (e) {

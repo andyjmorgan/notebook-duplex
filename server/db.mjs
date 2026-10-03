@@ -36,6 +36,17 @@ const migrations = [
    create table if not exists revisions (
      document_id uuid references documents(id) on delete cascade, revision int not null, state_key text not null,
      author text, created_at timestamptz not null default now(), primary key (document_id, revision));`,
+  // Private libraries: every document and folder belongs to one user. Unowned rows (legacy import before any
+  // sign-in) go to whoever last edited them, else to the first registered account; anything still unowned is
+  // claimed by the first user who signs in (see upsertUser).
+  `alter table folders add column if not exists owner text references users(sub);
+   alter table folders drop constraint if exists folders_pkey;
+   create unique index if not exists folders_owner_path on folders (coalesce(owner, ''), path);
+   alter table documents drop constraint if exists documents_folder_slug_key;
+   create unique index if not exists documents_owner_folder_slug on documents (coalesce(owner, ''), folder, slug);
+   create index if not exists documents_owner on documents (owner) where deleted_at is null;
+   update documents set owner = coalesce(owner, updated_by, (select sub from users order by created_at asc limit 1)) where owner is null;
+   update folders set owner = coalesce(owner, created_by, (select sub from users order by created_at asc limit 1)) where owner is null;`
 ]
 
 export const normaliseFolder = path => { const parts = String(path ?? '/').split('/').map(p => p.trim()).filter(Boolean); if (parts.some(p => p === '.' || p === '..')) throw new Error('Invalid folder path'); return '/' + parts.join('/') }
@@ -70,27 +81,35 @@ export class Db {
 
   // Users
   async upsertUser({ sub, email, name }) {
-    return this.one(`insert into users (sub, email, name) values ($1, $2, $3)
+    const user = await this.one(`insert into users (sub, email, name) values ($1, $2, $3)
       on conflict (sub) do update set email = coalesce(excluded.email, users.email), name = coalesce(excluded.name, users.name), last_seen_at = now() returning *`, [sub, email ?? null, name ?? null])
+    // The only account on a deployment inherits anything created before anyone signed in (the legacy import).
+    await this.query('update documents set owner = $1 where owner is null and not exists (select 1 from users where sub <> $1)', [sub])
+    await this.query('update folders set owner = $1 where owner is null and not exists (select 1 from users where sub <> $1)', [sub])
+    return user
   }
   async user(sub) { return this.one('select * from users where sub = $1', [sub]) }
+  async soleUser() { const rows = await this.query('select sub from users limit 2'); return rows.length === 1 ? rows[0].sub : null }
 
   // Documents
-  async uniqueSlug(folder, title, excludeId) {
+  async uniqueSlug(owner, folder, title, excludeId) {
     const base = slugify(title)
-    const taken = new Set((await this.query('select slug from documents where folder = $1 and (slug = $2 or slug like $3) and id is distinct from $4', [folder, base, base + '-%', excludeId ?? null])).map(r => r.slug))
+    const taken = new Set((await this.query("select slug from documents where coalesce(owner, '') = coalesce($5, '') and folder = $1 and (slug = $2 or slug like $3) and id is distinct from $4", [folder, base, base + '-%', excludeId ?? null, owner ?? null])).map(r => r.slug))
     if (!taken.has(base)) return base
     for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`
   }
   async createDocument({ id = randomUUID(), title, folder = '/', tags = [], frontmatter = {}, bodyText = '', wordCount = 0, owner = null }) {
     folder = normaliseFolder(folder)
-    const slug = await this.uniqueSlug(folder, title)
+    const slug = await this.uniqueSlug(owner, folder, title)
     return row(await this.one(`insert into documents (id, title, folder, slug, tags, frontmatter, body_text, word_count, state_key, owner, updated_by)
       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10) returning *`, [id, title, folder, slug, normaliseTags(tags), frontmatter, bodyText, wordCount, `docs/${id}/state.json`, owner]))
   }
-  async document(id, { deleted = false } = {}) { return row(await this.one(`select * from documents where id = $1 ${deleted ? '' : 'and deleted_at is null'}`, [id])) }
-  async documents({ folder, deleted = false } = {}) {
-    return (await this.query(`select * from documents where ${deleted ? 'deleted_at is not null' : 'deleted_at is null'} ${folder ? 'and folder = $1' : ''} order by folder, lower(title)`, folder ? [normaliseFolder(folder)] : [])).map(row)
+  async document(id, { deleted = false, owner } = {}) { return row(await this.one(`select * from documents where id = $1 ${deleted ? '' : 'and deleted_at is null'} ${owner !== undefined ? 'and owner = $2' : ''}`, owner !== undefined ? [id, owner] : [id])) }
+  async documents({ folder, deleted = false, owner } = {}) {
+    const params = []; const where = [deleted ? 'deleted_at is not null' : 'deleted_at is null']
+    if (owner !== undefined) { params.push(owner); where.push(`owner = $${params.length}`) }
+    if (folder) { params.push(normaliseFolder(folder)); where.push(`folder = $${params.length}`) }
+    return (await this.query(`select * from documents where ${where.join(' and ')} order by folder, lower(title)`, params)).map(row)
   }
   async countDocuments() { return Number((await this.one('select count(*)::int as n from documents')).n) }
   async updateDocument(id, { title, folder, tags, frontmatter, bodyText, wordCount, revision, updatedBy }) {
@@ -98,7 +117,7 @@ export class Db {
     if (!current) throw new Error('Document not found')
     const nextFolder = folder !== undefined ? normaliseFolder(folder) : current.folder
     const nextTitle = title !== undefined ? String(title).trim().slice(0, 300) || 'Untitled' : current.title
-    const slug = nextFolder !== current.folder || nextTitle !== current.title ? await this.uniqueSlug(nextFolder, nextTitle, id) : current.slug
+    const slug = nextFolder !== current.folder || nextTitle !== current.title ? await this.uniqueSlug(current.owner, nextFolder, nextTitle, id) : current.slug
     return row(await this.one(`update documents set title = $2, folder = $3, slug = $4, tags = $5, frontmatter = $6, body_text = coalesce($7, body_text), word_count = coalesce($8, word_count),
       revision = coalesce($9, revision), updated_by = coalesce($10, updated_by), updated_at = now() where id = $1 returning *`,
       [id, nextTitle, nextFolder, slug, tags !== undefined ? normaliseTags(tags) : current.tags, frontmatter ?? current.frontmatter, bodyText ?? null, wordCount ?? null, revision ?? null, updatedBy ?? null]))
@@ -107,38 +126,38 @@ export class Db {
   async restore(id) {
     const doc = await this.document(id, { deleted: true })
     if (!doc) throw new Error('Document not found')
-    const slug = await this.uniqueSlug(doc.folder, doc.title, id)
+    const slug = await this.uniqueSlug(doc.owner, doc.folder, doc.title, id)
     return row(await this.one('update documents set deleted_at = null, slug = $2 where id = $1 returning *', [id, slug]))
   }
-  async findByTitle(title) { return row(await this.one('select * from documents where deleted_at is null and lower(title) = lower($1) order by updated_at desc limit 1', [title])) }
-  async findByTitles(titles) {
+  async findByTitle(title, owner) { return row(await this.one('select * from documents where deleted_at is null and owner is not distinct from $2 and lower(title) = lower($1) order by updated_at desc limit 1', [title, owner ?? null])) }
+  async findByTitles(titles, owner) {
     if (!titles.length) return []
-    return (await this.query('select id, title, folder from documents where deleted_at is null and lower(title) = any($1)', [titles.map(t => t.toLowerCase())]))
+    return (await this.query('select id, title, folder from documents where deleted_at is null and owner is not distinct from $2 and lower(title) = any($1)', [titles.map(t => t.toLowerCase()), owner ?? null]))
   }
 
   // Folders: the ones documents imply, plus explicit empty markers, plus every ancestor.
-  async folders() {
-    const rows = await this.query('select folder as path from documents where deleted_at is null union select path from folders')
+  async folders(owner) {
+    const rows = await this.query('select folder as path from documents where deleted_at is null and owner is not distinct from $1 union select path from folders where owner is not distinct from $1', [owner ?? null])
     const all = new Set(['/'])
     for (const { path } of rows) { let p = path; while (p && !all.has(p)) { all.add(p); p = parentOf(p) } }
     return [...all].sort()
   }
-  async createFolder(path, by) { path = normaliseFolder(path); if (path === '/') return path; await this.query('insert into folders (path, created_by) values ($1, $2) on conflict do nothing', [path, by ?? null]); return path }
-  async deleteFolder(path) {
+  async createFolder(path, owner) { path = normaliseFolder(path); if (path === '/') return path; await this.query("insert into folders (path, created_by, owner) values ($1, $2, $2) on conflict (coalesce(owner, ''), path) do nothing", [path, owner ?? null]); return path }
+  async deleteFolder(path, owner) {
     path = normaliseFolder(path)
     if (path === '/') throw new Error('The root folder cannot be deleted')
-    const used = await this.one('select count(*)::int as n from documents where deleted_at is null and (folder = $1 or folder like $2)', [path, path + '/%'])
-    const sub = await this.one('select count(*)::int as n from folders where path like $1', [path + '/%'])
+    const used = await this.one('select count(*)::int as n from documents where deleted_at is null and owner is not distinct from $3 and (folder = $1 or folder like $2)', [path, path + '/%', owner ?? null])
+    const sub = await this.one('select count(*)::int as n from folders where owner is not distinct from $2 and path like $1', [path + '/%', owner ?? null])
     if (used.n || sub.n) throw new Error('Folder is not empty')
-    await this.query('delete from folders where path = $1', [path])
+    await this.query('delete from folders where path = $1 and owner is not distinct from $2', [path, owner ?? null])
   }
 
   // Tags and relations
-  async tags() { return this.query('select tag, count(*)::int as count from documents, unnest(tags) as tag where deleted_at is null group by tag order by count desc, tag') }
-  async byTag(tag) { return (await this.query('select * from documents where deleted_at is null and $1 = any(tags) order by folder, lower(title)', [normaliseTag(tag)])).map(row) }
+  async tags(owner) { return this.query('select tag, count(*)::int as count from documents, unnest(tags) as tag where deleted_at is null and owner is not distinct from $1 group by tag order by count desc, tag', [owner ?? null]) }
+  async byTag(tag, owner) { return (await this.query('select * from documents where deleted_at is null and owner is not distinct from $2 and $1 = any(tags) order by folder, lower(title)', [normaliseTag(tag), owner ?? null])).map(row) }
   async related(id, limit = 10) {
     return this.query(`select d.id, d.title, d.folder, array(select t from unnest(d.tags) t where t = any(s.tags)) as "sharedTags"
-      from documents d, documents s where s.id = $1 and d.id <> s.id and d.deleted_at is null and d.tags && s.tags order by cardinality(array(select t from unnest(d.tags) t where t = any(s.tags))) desc, d.updated_at desc limit $2`, [id, limit])
+      from documents d, documents s where s.id = $1 and d.id <> s.id and d.deleted_at is null and d.owner is not distinct from s.owner and d.tags && s.tags order by cardinality(array(select t from unnest(d.tags) t where t = any(s.tags))) desc, d.updated_at desc limit $2`, [id, limit])
   }
   async setLinks(fromId, links) {
     const client = await this.pool.connect()
@@ -150,16 +169,17 @@ export class Db {
     } catch (e) { await client.query('rollback'); throw e } finally { client.release() }
   }
   async links(id) {
-    const out = await this.query('select d.id, d.title, d.folder, l.kind from links l join documents d on d.id = l.to_id where l.from_id = $1 and d.deleted_at is null order by lower(d.title)', [id])
-    const inbound = await this.query('select d.id, d.title, d.folder, l.kind from links l join documents d on d.id = l.from_id where l.to_id = $1 and d.deleted_at is null order by lower(d.title)', [id])
+    const out = await this.query('select d.id, d.title, d.folder, l.kind from links l join documents d on d.id = l.to_id join documents s on s.id = l.from_id where l.from_id = $1 and d.deleted_at is null and d.owner is not distinct from s.owner order by lower(d.title)', [id])
+    const inbound = await this.query('select d.id, d.title, d.folder, l.kind from links l join documents d on d.id = l.from_id join documents s on s.id = l.to_id where l.to_id = $1 and d.deleted_at is null and d.owner is not distinct from s.owner order by lower(d.title)', [id])
     return { out, in: inbound }
   }
 
   // Search: web-style query over title, tags and body, with a trigram pass on titles when the query matches nothing.
-  async search(q, { folder, tag, limit = 20 } = {}) {
+  async search(q, { folder, tag, limit = 20, owner } = {}) {
     const text = String(q ?? '').trim()
     if (!text) return []
     const where = ['d.deleted_at is null']; const params = [text]
+    params.push(owner ?? null); where.push(`d.owner is not distinct from $${params.length}`)
     if (folder) { params.push(normaliseFolder(folder)); where.push(`d.folder = $${params.length}`) }
     if (tag) { params.push(normaliseTag(tag)); where.push(`$${params.length} = any(d.tags)`) }
     params.push(Math.max(1, Math.min(100, Number(limit) || 20)))
