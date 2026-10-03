@@ -231,7 +231,6 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--border-default);
 .dark [data-sonner-toaster] { --normal-bg: var(--bg-elevated); --normal-text: var(--text-primary); --normal-border: var(--border-strong) }
 [data-sonner-toast] { border-radius: var(--radius) !important; font-size: 12.5px !important; box-shadow: var(--shadow-pop) !important }
 [data-sonner-toast] [data-button] { background: var(--accent) !important; color: #fff !important; border-radius: 8px !important; font-weight: 600 }
-.gate { min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at 30% 20%, var(--accent-muted), var(--ui-canvas) 55%) }
 .gate-card, .empty-card { background: var(--bg-primary); border: 1px solid var(--border-default); border-radius: var(--radius-card); padding: 36px 34px 30px; width: 400px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow-soft) }
 .gate-card h1, .empty-card h1 { font-size: 24px; font-weight: 600; margin: 6px 0 0; letter-spacing: -.3px } .gate-card p, .empty-card p { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); line-height: 19px }
 .gate-card .primary, .empty-card .primary { align-self: flex-start; padding: 9px 18px; font-size: 13px } .gate-theme { align-self: flex-start; margin-top: 6px; padding-left: 0 }
@@ -375,3 +374,17 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--border-default);
 .rail-section.held { background: var(--ui-reading-soft); margin: 0 -8px 18px; padding: 10px 8px 12px; border-radius: var(--radius) } .rail-section.held .section-label { border-bottom-color: var(--ui-reading-chip); color: var(--ui-reading) } .rail-section.held .section-label span:last-child:not(:first-child) { background: var(--ui-reading-chip); color: var(--ui-reading) }
 .held-item .job-status { background: var(--ui-reading-chip); color: var(--ui-reading) } .stop-reading { color: var(--ui-reading); font-weight: 600; margin-top: 6px; padding-left: 0 }
 .menu-item .menu-icon.reading { color: var(--ui-reading) }
+
+/* Brand lockup, top bar icons */
+.brand-lockup { display: inline-flex; align-items: center; gap: 10px } .brand-image { width: 32px; height: 32px; flex-shrink: 0 } .brand-text { display: flex; flex-direction: column; line-height: 1 } .brand-name { font-size: 14px; font-weight: 700; letter-spacing: -.2px } .brand-product { margin-top: 4px; font-size: 10px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; color: var(--accent) }
+.icon-button { display: inline-grid; place-items: center; width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: var(--radius); color: var(--text-secondary) } .icon-button:hover { background: var(--bg-tertiary); color: var(--text-primary) }
+
+/* Sign-in, laid out like the other DonkeyWork apps */
+.gate { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg-primary); color: var(--text-primary); position: relative }
+.gate-corner { position: absolute; top: 12px; right: 16px }
+.gate-main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 16px; gap: 8px }
+.gate-logo { width: 96px; height: 96px; margin-bottom: 8px }
+.gate-main h1 { font-size: 30px; font-weight: 700; margin: 0; letter-spacing: -.3px } .gate-sub { margin: 0 0 16px; color: var(--text-secondary); font-size: 15px }
+.providers { display: flex; justify-content: center; gap: 16px }
+.provider { width: 48px; height: 48px; min-height: 0; padding: 0; display: grid; place-items: center; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--bg-secondary); color: var(--text-primary) } .provider:hover { background: var(--bg-tertiary); border-color: var(--accent) }
+.gate-footer { padding: 16px; text-align: center; font-size: 13px; color: var(--text-secondary) }

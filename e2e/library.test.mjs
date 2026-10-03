@@ -202,9 +202,12 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
 
   // Theme: the user menu switches to dark, the choice persists across reloads, and brand goes back to the document
   await page.click('.avatar')
-  await page.click('.menu-theme button[title="Dark"]')
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true, 'dark is the default, like the other DonkeyWork apps')
+  await page.click('.appbar button[aria-label="Toggle theme"]')
+  assert.equal(await page.evaluate(() => localStorage.getItem('donkeywork-theme')), 'light')
+  await page.click('.appbar button[aria-label="Toggle theme"]')
   await until(() => page.evaluate(() => document.documentElement.classList.contains('dark')))
-  assert.equal(await page.evaluate(() => localStorage.getItem('notebook-duplex.theme')), 'dark')
+  assert.equal(await page.evaluate(() => localStorage.getItem('donkeywork-theme')), 'dark')
   await page.keyboard.press('Escape')
   await page.click('.brand')
   await until(() => page.url().match(/\/d\//))
@@ -222,7 +225,7 @@ test('library: sign-in, routing, tree, search, tags, properties, wikilinks, swit
   await page.waitForSelector('.tiptap')
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), true, 'dark theme survives a reload')
   await page.click('.avatar')
-  await page.click('.menu-theme button[title="Light"]')
+  await page.click('.appbar button[aria-label="Toggle theme"]')
   await until(() => page.evaluate(() => !document.documentElement.classList.contains('dark')))
 
   // The last opened document is remembered for /

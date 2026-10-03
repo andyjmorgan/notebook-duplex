@@ -49,7 +49,7 @@ function SettingsShell({ user, children }: { user: AuthUser; children: React.Rea
 export function App() {
   const { status, user, error } = useAuth()
   const theme = useTheme()
-  if (status !== 'signed-in' || !user) return <><SignIn status={status === 'signed-in' ? 'loading' : status} error={error} /><Toaster position="bottom-center" theme={theme.resolved} /></>
+  if (status !== 'signed-in' || !user) return <><SignIn status={status === 'signed-in' ? 'loading' : status} error={error} /><Toaster position="bottom-center" theme={theme.theme} /></>
   return (
     <BrowserRouter>
       <LibraryProvider>
@@ -63,7 +63,7 @@ export function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </LibraryProvider>
-      <Toaster position="bottom-center" theme={theme.resolved} closeButton richColors={false} toastOptions={{ className: 'toast', duration: 4200 }} />
+      <Toaster position="bottom-center" theme={theme.theme} closeButton richColors={false} toastOptions={{ className: 'toast', duration: 4200 }} />
     </BrowserRouter>
   )
 }

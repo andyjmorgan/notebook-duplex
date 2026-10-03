@@ -1,22 +1,31 @@
-import { Moon, Sun } from 'lucide-react'
-import { Brand } from '../components/AppBar'
 import { auth } from '../auth'
-import { useTheme } from '../theme'
+import { ThemeToggle } from '../components/AppBar'
+import { AppleIcon, GitHubIcon, GoogleIcon, MicrosoftIcon } from '../components/Brand'
+
+const providers = [
+  { id: 'google', name: 'Google', Icon: GoogleIcon },
+  { id: 'github', name: 'GitHub', Icon: GitHubIcon },
+  { id: 'microsoft', name: 'Microsoft', Icon: MicrosoftIcon },
+  { id: 'apple', name: 'Apple', Icon: AppleIcon },
+]
 
 export function SignIn({ status, error }: { status: 'loading' | 'signed-out' | 'error'; error?: string }) {
-  const theme = useTheme()
+  const returnTo = location.pathname + location.search
   return (
-    <main className="gate">
-      <div className="gate-card">
-        <Brand large />
-        <h1>Notebook Duplex</h1>
-        <p>A shared library of notebooks for you and your Claude sessions. Sign in with your lab account to open it.</p>
+    <div className="gate">
+      <div className="gate-corner"><ThemeToggle /></div>
+      <main className="gate-main">
+        <img src="/donkeywork.png" alt="DonkeyWork" className="gate-logo" width={96} height={96} />
+        <h1>Welcome back</h1>
+        <p className="gate-sub">Sign in to open your notebooks</p>
         {status === 'loading' ? <p className="caption" role="status">Checking your session…</p> : (
-          <button className="primary" type="button" autoFocus onClick={() => void auth.signIn(location.pathname + location.search)}>Sign in</button>
+          <div className="providers">
+            {providers.map(p => <button key={p.id} type="button" className="provider" title={`Sign in with ${p.name}`} aria-label={`Sign in with ${p.name}`} onClick={() => void auth.signIn(returnTo, p.id)}><p.Icon size={p.id === 'github' ? 22 : undefined} /></button>)}
+          </div>
         )}
         {error && <p className="gate-error" role="alert">{error}</p>}
-        <button className="quiet small gate-theme" type="button" onClick={() => theme.set(theme.resolved === 'dark' ? 'light' : 'dark')}>{theme.resolved === 'dark' ? <Sun size={14} aria-hidden /> : <Moon size={14} aria-hidden />} {theme.resolved === 'dark' ? 'Light theme' : 'Dark theme'}</button>
-      </div>
-    </main>
+      </main>
+      <footer className="gate-footer">Built with questionable decisions and caffeine</footer>
+    </div>
   )
 }

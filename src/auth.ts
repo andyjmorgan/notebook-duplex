@@ -87,11 +87,11 @@ class Auth {
     if (this.dev || !this.um) return Promise.resolve(false)
     return this.recovering ??= this.um.signinSilent().then(u => { if (u) this.set('signed-in', toUser(u)); return Boolean(u) }).catch(() => false).finally(() => { this.recovering = undefined })
   }
-  async signIn(returnTo = location.pathname + location.search) {
+  async signIn(returnTo = location.pathname + location.search, idpHint?: string) {
     if (!this.um) return
     await this.flushAll()
     try { sessionStorage.setItem(RETURN_KEY, returnTo) } catch {}
-    await this.um.signinRedirect({ state: returnTo })
+    await this.um.signinRedirect({ state: returnTo, extraQueryParams: idpHint ? { kc_idp_hint: idpHint } : undefined })
   }
   /** Session lost: save what we can, then go back through sign-in without losing the writer's place. */
   private async leave(reason: string) {
