@@ -1,13 +1,15 @@
 import { createServer } from 'node:http'
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises'
+import { randomUUID, createHash } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 import { createReadStream, existsSync } from 'node:fs'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { Store } from './store.mjs'
+import { Db } from './db.mjs'
+import { storageFromEnv } from './storage.mjs'
+import { authFromEnv } from './auth.mjs'
+import { Library } from './library.mjs'
 import { createMcpServer, channelNotification } from './mcp.mjs'
-import { createHash } from 'node:crypto'
 import { describeDiagramFallback, describeCodeFallback, diagramUtterance, codeUtterance, spokenText } from '../shared/narration.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -15,49 +17,30 @@ const dataDir = resolve(process.env.DATA_DIR ?? join(root, '.runtime'))
 const distDir = resolve(process.env.STATIC_DIR ?? join(root, 'dist'))
 const port = Number(process.env.PORT ?? 8787)
 const host = process.env.HOST ?? '127.0.0.1'
-const apiKey = process.env.NOTEBOOK_API_KEY || (() => { const k = randomBytes(24).toString('base64url'); console.log('NOTEBOOK_API_KEY not set. Using a generated key for this run:\n  ' + k); return k })()
-const keyBuffer = Buffer.from(apiKey)
 const sessionGrace = Number(process.env.SESSION_GRACE_MS ?? 20000)
+const oidc = { authority: process.env.OIDC_AUTHORITY_PUBLIC ?? process.env.OIDC_ISSUER ?? null, clientId: process.env.OIDC_CLIENT_ID ?? null }
 // Read-aloud: Kokoro TTS (in-cluster service first, GPU host as fallback) and an LLM for describing diagrams and code.
 const kokoro = { urls: [process.env.KOKORO_URL ?? 'http://kokoro-tts.kokoro-tts.svc.cluster.local:8000', process.env.KOKORO_FALLBACK_URL ?? 'http://192.168.69.28:30882'].filter(Boolean).map(u => u.replace(/\/$/, '')), voice: process.env.KOKORO_VOICE || 'af_heart', active: 0 }
 const describeLlm = { url: (process.env.DESCRIBE_LLM_URL ?? 'http://192.168.69.28:11434').replace(/\/$/, ''), model: process.env.DESCRIBE_LLM_MODEL || 'gemma4:26b', timeout: Number(process.env.DESCRIBE_LLM_TIMEOUT_MS ?? 20000) }
 
-await mkdir(dataDir, { recursive: true, mode: 0o700 })
-let saved
-try { saved = JSON.parse(await readFile(join(dataDir, 'state.json'), 'utf8')) } catch (e) { if (e.code !== 'ENOENT') throw e }
+if (!process.env.DATABASE_URL) { console.error('DATABASE_URL is required'); process.exit(2) }
+const db = new Db(process.env.DATABASE_URL)
+await db.migrate()
+const storage = storageFromEnv()
+await storage.ensureBucket()
+const auth = authFromEnv(db)
+await auth.start()
+if (auth.dev) console.log(`AUTH_DEV_USER: every request acts as ${auth.dev.email} (development only)`)
 const sessions = new Map()
-const store = new Store(saved, { isLiveSession: id => sessions.has(id) || id === 'local-test' })
 const transports = new Map()
+const library = new Library({ db, storage, isLiveSession: id => sessions.has(id) || id === 'local-test' })
+await library.importLegacy(dataDir)
 
-let saveTimer, saving = Promise.resolve(), waiters = []
-async function writeState() {
-  const tmp = join(dataDir, 'state.tmp')
-  await writeFile(tmp, JSON.stringify(store.state), { mode: 0o600 })
-  await rename(tmp, join(dataDir, 'state.json'))
-}
-// Debounced, but every caller's promise resolves once the next write completes.
-function save() {
-  return new Promise(done => {
-    waiters.push(done)
-    clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => {
-      const batch = waiters; waiters = []
-      saving = saving.then(writeState).catch(e => console.error('save failed: ' + e.message)).finally(() => batch.forEach(d => d()))
-    }, 50)
-  })
-}
-
-function authorized(req) {
-  const header = req.headers.authorization ?? ''
-  const given = Buffer.from(header.startsWith('Bearer ') ? header.slice(7) : '')
-  return given.length === keyBuffer.length && timingSafeEqual(given, keyBuffer)
-}
 function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Build': buildId }); res.end(JSON.stringify(data)) }
 function readBody(req) {
   return new Promise((ok, fail) => { let body = ''; req.on('data', c => { body += c; if (body.length > 4_000_000) { req.destroy(); fail(new Error('Body too large')) } }); req.on('end', () => ok(body)); req.on('error', fail) })
 }
-
-const sessionView = () => [...sessions.values()].map(s => ({ id: s.id, name: s.name, repo: s.repo, connectedAt: s.connectedAt, lastSeen: s.lastSeen, connected: true, streaming: s.streams > 0 }))
+const sessionView = () => [...sessions.values()].map(s => ({ id: s.id, name: s.name, repo: s.repo, user: s.user?.name, connectedAt: s.connectedAt, lastSeen: s.lastSeen, connected: true, streaming: s.streams > 0 }))
 
 class MemoryEventStore {
   constructor() { this.events = []; this.limit = 500 }
@@ -79,13 +62,15 @@ async function notify(job) {
 }
 setInterval(() => {
   for (const session of sessions.values()) if (session.streams === 0 && Date.now() - Math.max(session.streamClosedAt ?? 0, session.connectedAt, session.lastSeen) > sessionGrace) dropSession(session.id)
-  // Jobs orphaned by a restart or disconnect go to a live session of the same name (same repo), else wait for list_jobs.
-  for (const job of store.orphans()) { const heir = [...sessions.values()].find(s => s.name === job.sessionName); if (heir) { store.reassign(job, heir.id); void save() } }
-  store.expireOrphans(Number(process.env.ORPHAN_MAX_AGE_MS ?? 600000))
-  for (const job of store.state.jobs) if (job.status === 'queued' && sessions.has(job.sessionId) && Date.now() - (job.notifiedAt ?? 0) > 20000 && (job.notifyCount ?? 0) < 30) void notify(job)
+  for (const { id, store } of library.stores()) {
+    // Jobs orphaned by a restart or disconnect go to a live session of the same name (same repo), else wait for list_jobs.
+    for (const job of store.orphans()) { const heir = [...sessions.values()].find(s => s.name === job.sessionName); if (heir) { store.reassign(job, heir.id); void library.save(id) } }
+    store.expireOrphans(Number(process.env.ORPHAN_MAX_AGE_MS ?? 600000))
+    for (const job of store.state.jobs) if (job.status === 'queued' && sessions.has(job.sessionId) && Date.now() - (job.notifiedAt ?? 0) > 20000 && (job.notifyCount ?? 0) < 30) void notify(job)
+  }
 }, Math.min(5000, sessionGrace)).unref()
 
-async function handleMcp(req, res) {
+async function handleMcp(req, res, user) {
   const sessionId = req.headers['mcp-session-id']
   let transport = sessionId ? transports.get(sessionId) : undefined
   if (req.method === 'POST' && !transport) {
@@ -94,19 +79,19 @@ async function handleMcp(req, res) {
     try { parsed = JSON.parse(body) } catch { return json(res, 400, { error: 'Invalid JSON' }) }
     const isInit = (Array.isArray(parsed) ? parsed : [parsed]).some(m => m?.method === 'initialize')
     if (!isInit) return json(res, sessionId ? 404 : 400, { jsonrpc: '2.0', error: { code: -32000, message: sessionId ? 'Session not found. Reconnect to start a new session.' : 'Missing session. Send initialize first.' }, id: null })
-    const session = { id: '', name: 'Claude', repo: '', connectedAt: Date.now(), lastSeen: Date.now(), streams: 0 }
+    const session = { id: '', name: 'Claude', repo: '', user, connectedAt: Date.now(), lastSeen: Date.now(), streams: 0 }
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       eventStore: new MemoryEventStore(),
       onsessioninitialized: id => {
         session.id = id
         sessions.set(id, session); transports.set(id, transport)
-        console.log(`session ${id.slice(0, 8)} connected (${session.name})`)
+        console.log(`session ${id.slice(0, 8)} connected (${session.name}, ${user.name})`)
       },
       onsessionclosed: id => dropSession(id),
     })
     transport.onclose = () => { if (session.id) dropSession(session.id) }
-    session.mcp = createMcpServer(session, store, save)
+    session.mcp = createMcpServer(session, library, user)
     session.mcp.oninitialized = () => {
       const client = session.mcp.getClientVersion()
       if (client?.name && session.name === 'Claude') session.name = client.name === 'claude-code' ? 'Claude Code' : client.name.slice(0, 80)
@@ -128,46 +113,88 @@ function dropSession(id) {
 
 let sequence = Promise.resolve()
 function serial(fn) { const run = sequence.then(fn, fn); sequence = run.catch(() => {}); return run }
+class HttpError extends Error { constructor(status, message) { super(message); this.status = status } }
+const notFound = () => { throw new HttpError(404, 'Not found') }
 
-async function handleApi(req, res, path) {
-  const body = req.method === 'POST' ? await readBody(req) : ''
-  const data = body ? JSON.parse(body) : {}
+// Document editing routes, now per document: /api/d/:id/<action>.
+async function handleDocument(req, id, action, data, user, url) {
+  if (req.method === 'GET' && action === 'state') return { ...(await library.view(id, { lite: url.searchParams.has('lite') })), sessions: sessionView() }
+  if (req.method !== 'POST') notFound()
+  const store = await library.open(id)
+  let result
+  if (action === 'sync') return library.sync(id, data, user)
+  else if (action === 'jobs') {
+    const session = sessions.get(data.sessionId)
+    if (!session) throw new Error('Choose a connected Claude session first.')
+    const job = store.enqueue({ ...data, sessionName: session.name, requestedBy: { sub: user.sub, name: user.name } })
+    void notify(job)
+    const { snapshot, ...view } = job
+    result = view
+  }
+  else if (action === 'cancel') { store.cancel(data.id); result = { ok: true } }
+  else if (action === 'review') {
+    result = store.review(data.id, data.decision, data)
+    if (result.job) { void notify(result.job); const { snapshot, ...view } = result.job; result = { ...result, job: view } }
+    if (result.proposal?.status === 'accepted') { await library.index(id, store, user); void library.archive(id, user.sub) }
+  }
+  else if (action === 'demo') {
+    const block = store.snapshot().blocks.find(b => b.id === data.blockId && b.plain && b.text)
+    if (!block) throw new Error('Place the caret in a plain-text paragraph for the local test.')
+    const job = store.enqueue({ instruction: 'Local approval test — no agent involved', blockIds: [block.id], sessionId: 'local-test', sessionName: 'Local test', requestedBy: { sub: user.sub, name: user.name } })
+    store.claim(job.id, 'local-test')
+    store.activity(job.id, 'local-test', { state: 'writing', progress: 60, message: 'Drafting a fixture' })
+    result = store.propose({ jobId: job.id, type: 'replace', blockId: block.id, blockRevision: block.revision, before: block.text, after: block.text.replace(/\s+$/, '') + ' This sentence is a local test suggestion.', explanation: 'A fixture for trying accept, reject, reconsider and stale detection. No model was called.' }, 'local-test')
+    store.propose({ jobId: job.id, type: 'insert', anchorBlockId: block.id, placement: 'after', markdown: '> A local insert fixture. Edit this text, then accept or reject it.\n\n- It can carry lists\n- and other Markdown', explanation: 'Shows how inserted content is reviewed. No model was called.' }, 'local-test')
+    store.status(job.id, 'local-test', 'completed', 'Local fixture generated')
+  }
+  else notFound()
+  void library.save(id, user.sub)
+  return result
+}
+
+async function handleApi(req, res, url, user) {
+  const path = url.pathname
+  const body = ['POST', 'PATCH', 'DELETE'].includes(req.method) ? await readBody(req) : ''
+  let data = {}
+  if (body) { try { data = JSON.parse(body) } catch { return json(res, 400, { error: 'Invalid JSON' }) } }
+  const parts = path.split('/').slice(2).map(decodeURIComponent)   // ['documents', ':id', ...]
+  const [head, a, b] = parts
+  const m = req.method
   return serial(async () => {
     try {
       let result
-      if (req.method === 'GET' && path === '/api/state') {
-        result = { ...store.view(), sessions: sessionView() }
-        if (new URL(req.url, 'http://localhost').searchParams.has('lite')) result.document = { ...result.document, json: undefined, markdown: undefined }
+      if (head === 'd' && a && b && parts.length === 3) result = await handleDocument(req, a, b, data, user, url)
+      else if (m === 'GET' && path === '/api/me') result = { sub: user.sub, email: user.email, name: user.name, via: user.via, mcpUrl: publicUrl(req) + '/mcp' }
+      else if (m === 'GET' && path === '/api/tokens') result = await db.tokens(user.sub)
+      else if (m === 'POST' && path === '/api/tokens') result = await auth.mintToken(user.sub, data.name)
+      else if (m === 'DELETE' && head === 'tokens' && a && parts.length === 2) { if (!(await db.revokeToken(a, user.sub))) notFound(); result = { ok: true } }
+      else if (m === 'GET' && path === '/api/library') result = await library.library()
+      else if (m === 'POST' && path === '/api/documents') result = await library.create(data, user)
+      else if (head === 'documents' && a && parts.length === 2) {
+        if (m === 'GET') result = await library.get(a)
+        else if (m === 'PATCH') result = await library.patch(a, data, user)
+        else if (m === 'DELETE') result = await library.remove(a)
+        else notFound()
       }
-      else if (req.method === 'GET' && path === '/api/me') result = { ok: true, mcpUrl: publicUrl(req) + '/mcp' }
-      else if (req.method === 'POST' && path === '/api/sync') result = store.sync(data)
-      else if (req.method === 'POST' && path === '/api/jobs') {
-        const session = sessions.get(data.sessionId)
-        if (!session) throw new Error('Choose a connected Claude session first.')
-        const job = store.enqueue({ ...data, sessionName: session.name })
-        void notify(job)
-        const { snapshot, ...view } = job
-        result = view
+      else if (m === 'POST' && head === 'documents' && a && b === 'restore' && parts.length === 3) result = await library.restore(a)
+      else if (m === 'GET' && head === 'documents' && a && b === 'export.md' && parts.length === 3) {
+        const doc = await db.document(a, { deleted: true }); if (!doc) notFound()
+        const markdown = await library.exportMarkdown(a)
+        res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="${doc.slug}.md"`, 'Cache-Control': 'no-store', 'X-Build': buildId })
+        return res.end(markdown)
       }
-      else if (req.method === 'POST' && path === '/api/cancel') { store.cancel(data.id); result = { ok: true } }
-      else if (req.method === 'POST' && path === '/api/review') {
-        result = store.review(data.id, data.decision, data)
-        if (result.job) { void notify(result.job); const { snapshot, ...view } = result.job; result = { ...result, job: view } }
-      }
-      else if (req.method === 'POST' && path === '/api/demo') {
-        const block = store.snapshot().blocks.find(b => b.id === data.blockId && b.plain && b.text)
-        if (!block) throw new Error('Place the caret in a plain-text paragraph for the local test.')
-        const job = store.enqueue({ instruction: 'Local approval test — no agent involved', blockIds: [block.id], sessionId: 'local-test', sessionName: 'Local test' })
-        store.claim(job.id, 'local-test')
-        store.activity(job.id, 'local-test', { state: 'writing', progress: 60, message: 'Drafting a fixture' })
-        result = store.propose({ jobId: job.id, type: 'replace', blockId: block.id, blockRevision: block.revision, before: block.text, after: block.text.replace(/\s+$/, '') + ' This sentence is a local test suggestion.', explanation: 'A fixture for trying accept, reject, reconsider and stale detection. No model was called.' }, 'local-test')
-        store.propose({ jobId: job.id, type: 'insert', anchorBlockId: block.id, placement: 'after', markdown: '> A local insert fixture. Edit this text, then accept or reject it.\n\n- It can carry lists\n- and other Markdown', explanation: 'Shows how inserted content is reviewed. No model was called.' }, 'local-test')
-        store.status(job.id, 'local-test', 'completed', 'Local fixture generated')
-      }
-      else return json(res, 404, { error: 'Not found' })
-      if (req.method === 'POST') void save()
+      else if (m === 'POST' && path === '/api/folders') result = { path: await db.createFolder(data.path, user.sub) }
+      else if (m === 'DELETE' && path === '/api/folders') { await db.deleteFolder(url.searchParams.get('path') ?? data.path); result = { ok: true } }
+      else if (m === 'GET' && path === '/api/search') result = { results: await library.search(url.searchParams.get('q'), { folder: url.searchParams.get('folder') || undefined, tag: url.searchParams.get('tag') || undefined, limit: url.searchParams.get('limit') || undefined }) }
+      else if (m === 'GET' && path === '/api/tags') result = await db.tags()
+      else if (m === 'GET' && head === 'tags' && a && parts.length === 2) result = (await db.byTag(a)).map(d => ({ id: d.id, title: d.title, folder: d.folder, slug: d.slug, tags: d.tags, wordCount: d.wordCount, updatedAt: d.updatedAt, updatedBy: d.updatedBy }))
+      else notFound()
       json(res, 200, result)
-    } catch (e) { json(res, 400, { error: e.message }) }
+    } catch (e) {
+      const status = e.status ?? (/not found/i.test(e.message) ? 404 : 400)
+      if (status >= 500) console.error(e)
+      json(res, status, { error: e.message })
+    }
   })
 }
 const unreachable = e => e.name === 'TimeoutError' || e.name === 'AbortError' || /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ETIMEDOUT/.test([e.cause?.code, e.cause?.message, e.message].join(' '))
@@ -253,14 +280,17 @@ async function serveStatic(res, path) {
 
 const server = createServer(async (req, res) => {
   try {
-    const path = new URL(req.url, 'http://localhost').pathname
-    if (path === '/healthz') return json(res, 200, { ok: true, sessions: sessions.size })
+    const url = new URL(req.url, 'http://localhost')
+    const path = url.pathname
+    if (path === '/healthz') return json(res, 200, { ok: true, sessions: sessions.size, documents: library.cache.size })
+    if (path === '/api/config') return json(res, 200, { authority: oidc.authority, clientId: oidc.clientId, build: buildId, devUser: auth.dev ? auth.dev.email : undefined })
     if (path.startsWith('/api/') || path === '/mcp') {
-      if (!authorized(req)) { res.setHeader('WWW-Authenticate', 'Bearer realm="notebook-duplex"'); return json(res, 401, { error: 'Unauthorized' }) }
-      if (path === '/mcp') return await handleMcp(req, res)
+      const user = await auth.authenticate(req, { mcpOnly: path === '/mcp' })
+      if (!user) { res.setHeader('WWW-Authenticate', 'Bearer realm="notebook-duplex"'); return json(res, 401, { error: 'Unauthorized' }) }
+      if (path === '/mcp') return await handleMcp(req, res, user)
       if (path === '/api/tts') return await handleTts(req, res)
       if (path === '/api/describe') return await handleDescribe(req, res)
-      return await handleApi(req, res, path)
+      return await handleApi(req, res, url, user)
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'Method not allowed' })
     return await serveStatic(res, path)
@@ -272,5 +302,11 @@ const server = createServer(async (req, res) => {
 })
 server.keepAliveTimeout = 65000
 server.headersTimeout = 70000
-server.listen(port, host, () => console.log(`Notebook Duplex listening on http://${host}:${server.address().port} (data: ${dataDir})`))
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { server.close(); for (const id of [...sessions.keys()]) dropSession(id); saving.then(() => process.exit(0)) })
+server.listen(port, host, () => console.log(`Notebook Duplex listening on http://${host}:${server.address().port} (bucket: ${storage.bucket})`))
+let stopping = false
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
+  if (stopping) return
+  stopping = true
+  server.close(); for (const id of [...sessions.keys()]) dropSession(id)
+  library.flush().catch(() => {}).then(() => db.close()).finally(() => process.exit(0))
+})

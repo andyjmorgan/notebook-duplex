@@ -1,8 +1,8 @@
 # Notebook Duplex
 
-A hosted Markdown notebook where you write and a Claude Code session works beside you. You ask from the keyboard, keep typing, and Claude's suggestions arrive inline as reviewable diffs. Nothing changes until you accept it.
+A hosted Markdown notebook library where you write and a Claude Code session works beside you. You ask from the keyboard, keep typing, and Claude's suggestions arrive inline as reviewable diffs. Nothing changes until you accept it.
 
-Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a single notebook key.
+Live at **https://notebook.donkeywork.dev** (office cluster). Sign in with the lab's Keycloak; agents connect with a personal access token.
 
 ## How it feels
 
@@ -35,17 +35,28 @@ Live at **https://notebook.donkeywork.dev** (office cluster). Protected by a sin
 
   Themes: `default`, `neutral`, `forest`, `dark`, `base` (with `themeVariables`). Looks: `classic`, `handDrawn`, `neo`. Layouts: `dagre` or `elk` for flowcharts, state, class and ER diagrams; `cose` or `tidy-tree` for mindmaps. Any other Mermaid `config` key works too, slash insert menu, outline, Reading mode, Markdown import and export. Background proofreading treats a table as one unit rather than cell by cell.
 
+## Library
+
+One shared library per deployment: every signed-in user sees and edits every document, and each document records who created it and who last touched it.
+
+- **Folders are paths** (`/`, `/projects/lab`). Moving a document changes its path; an empty folder is a marker row until something lands in it.
+- **Front matter is the document's properties.** Markdown import reads a leading YAML block (`title`, `tags`, `folder`, `aliases`, plus anything else, kept verbatim); export writes one back. The Properties panel edits the full YAML.
+- **Tags relate documents**: lowercase slugs; two documents sharing a tag are related, ranked by how many they share. `[[Wikilinks]]` resolve by title (case-insensitive) into links and backlinks.
+- **Search** is Postgres full text (`websearch_to_tsquery`: phrases, OR, `-excluded`) over title, tags and body with highlighted snippets, and trigram similarity on titles when nothing matches (typos).
+- **Revisions**: the state is archived whenever a proposal is accepted and every 50 revisions.
+- `GET /api/documents/:id/export.md` downloads the Markdown with front matter; `POST /api/documents { markdown }` imports one.
+
 ## Connect a Claude session
 
-Claude Code channels only run as a local stdio process that Claude spawns, so the connection goes through a small shim, `agent/channel.mjs`, which proxies tools to the hosted server over MCP Streamable HTTP and forwards channel notifications back. Clone this repo once and `npm ci`, then register the shim (user scope makes it available from every repository):
+Open the user menu → **Agent access tokens** and create one. Tokens look like `ndp_…`, are shown once and stored hashed; revoke them from the same page. Claude Code channels only run as a local stdio process that Claude spawns, so the connection goes through a small shim, `agent/channel.mjs`, which proxies tools to the hosted server over MCP Streamable HTTP and forwards channel notifications back. Clone this repo once and `npm ci`, then register the shim (user scope makes it available from every repository):
 
 ```sh
 claude mcp add --transport stdio --scope user notebook-duplex -- \
-  node /path/to/notebook-duplex/agent/channel.mjs --url https://notebook.donkeywork.dev --key <notebook key>
+  node /path/to/notebook-duplex/agent/channel.mjs --url https://notebook.donkeywork.dev --token ndp_…
 claude --dangerously-load-development-channels server:notebook-duplex
 ```
 
-The rail's **Connect a Claude session** panel copies these commands with your key filled in. Accept the development-channel warning and the usual trust prompts in Claude's terminal. The shim names the session after the directory Claude runs in and reports that path, so you can tell sessions apart in the editor. `--name` overrides it; `NOTEBOOK_DUPLEX_URL`, `NOTEBOOK_DUPLEX_KEY` and `NOTEBOOK_DUPLEX_NAME` work as environment variables too.
+The tokens page copies these commands with your new token filled in. Accept the development-channel warning and the usual trust prompts in Claude's terminal. The shim names the session after the directory Claude runs in and reports that path, so you can tell sessions apart in the editor. `--name` overrides it; `NOTEBOOK_DUPLEX_URL`, `NOTEBOOK_DUPLEX_TOKEN` and `NOTEBOOK_DUPLEX_NAME` work as environment variables too (`--key` / `NOTEBOOK_DUPLEX_KEY` still work). Every job records which user asked.
 
 Multiple sessions can connect at once. Each job is addressed to one session. Restarting Claude creates a new session; cancel and resubmit anything it was holding. If you are on the lab LAN, the hostname must resolve to office1 rather than the public IP (the EdgeRouter has a static host mapping for this), or TLS will present the router's certificate.
 
@@ -56,26 +67,33 @@ Claude receives each command as a `notifications/claude/channel` event over the 
 | Tool | Purpose |
 | --- | --- |
 | `identify_session` | Name the session and report its working directory |
-| `list_jobs` | Queued and running jobs for this session, in case a notification was missed |
-| `claim_job` | Acknowledge a job and read the scoped blocks plus two neighbours (whole tables included), with revisions and any reconsideration or reply context; `full: true` for everything. Adopts jobs orphaned by a restart |
+| `list_jobs` | Queued and running jobs for this session across every document, in case a notification was missed |
+| `claim_job` | Acknowledge a job and read the scoped blocks plus two neighbours (whole tables included), with `documentId`, `documentTitle`, revisions and any reconsideration or reply context; `full: true` for everything. Adopts jobs orphaned by a restart |
 | `get_blocks` | Read specific snapshot blocks by ID |
-| `get_document_snapshot` | The whole snapshot or live document, including JSON. Large; use sparingly |
+| `get_document_snapshot` | The whole job snapshot, or the live state of any document by `documentId`, including JSON. Large; use sparingly |
 | `set_block_status` | Mark blocks as `reading`, `thinking`, `writing`, `waiting` or `done`, with optional progress and message |
 | `propose_changes` | `replace` a paragraph, heading or table (inline or GFM Markdown in and out), `delete` a block, `move` a contiguous run of top-level blocks, `insert` Markdown before or after an anchor, `replace_text` to find and replace across the document as one batch, or `comment` on a block |
 | `report_job_status` | `running`, `completed`, `failed` or `needs_permission`; returns a small status record. A completed job still accepts proposals for two minutes |
+| `list_documents` | Folders and documents in the library, optionally under one folder |
+| `search_documents` | Ranked full-text search with snippets, optionally within a tag |
+| `get_document` | Any document as Markdown with front matter |
+| `create_document` | Add a new document from Markdown (front matter sets title, tags, folder). The one write that needs no acceptance: it alters no existing text |
 
-There is no accept tool. The server verifies every proposal against the job snapshot, and acceptance checks the target's revision again at review time.
+Channel notifications carry `document_id` and `document_title` in `meta`. There is no accept tool. The server verifies every proposal against the job snapshot, and acceptance checks the target's revision again at review time.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Browser[React + Tiptap editor] -->|REST, bearer key| Server
-    Claude[Claude Code session] <-->|MCP Streamable HTTP + SSE, bearer key| Server
-    Server[Node server: document, jobs, proposals, activity] --> Disk[(state.json on PVC)]
+    Browser[React + Tiptap editor] -->|REST, Keycloak access token| Server
+    Claude[Claude Code session] <-->|MCP Streamable HTTP + SSE, ndp_ token| Server
+    Keycloak[Keycloak realm Agents] -.->|OIDC PKCE| Browser
+    Server[Node server: library, jobs, proposals, activity] --> PG[(Postgres: catalogue, tags, links, search, tokens)]
+    Server --> S3[(SeaweedFS: state.json, revisions, export.md per document)]
 ```
 
-- One Node process serves the built app, the `/api` routes, and the MCP endpoint at `/mcp`. Tiptap JSON is the canonical document; Markdown is import and export.
+- One Node process serves the built app, the `/api` routes, and the MCP endpoint at `/mcp`. Tiptap JSON is the canonical document; Markdown is import and export. Identity is Keycloak (realm `Agents`, public client `notebook-duplex`); the server verifies access tokens against the realm's JWKS on every `/api` request, and the MCP endpoint accepts only `ndp_` agent tokens.
+- Each document's editor state (Tiptap JSON plus jobs, proposals and activity) is one object in S3, loaded on demand into an in-memory `Store` and written back debounced; Postgres holds the catalogue (title, folder, slug, tags, front matter, plain text with a generated `tsvector`, links, revisions, users and token hashes). `server/db.mjs` runs its migrations at startup. See `docs/library.md` for the contract.
 - Stable block IDs and content hashes identify proposal targets. Job snapshots are immutable. Accepting applies the change on the server, mirrors it in the editor as one undoable transaction, and syncs.
 - Hosted behind Traefik on the office cluster with an **unproxied** DNS record. Cloudflare's proxy closes idle SSE streams after 100 seconds, so the hostname is DNS-only and traffic reaches the lab's static IP directly. Cluster manifests live in the lab GitOps repo under `clusters/office/applications/notebook-duplex/`.
 
@@ -83,33 +101,38 @@ flowchart LR
 
 Requires Node.js 24.
 
+Requires Docker for Postgres and SeaweedFS (the same images the tests use):
+
 ```sh
 npm ci
-NOTEBOOK_API_KEY=devkey npm run server     # http://127.0.0.1:8787, data in .runtime/
+docker run -d --name nd-pg -p 5432:5432 -e POSTGRES_USER=notebook -e POSTGRES_PASSWORD=notebook -e POSTGRES_DB=notebook pgvector/pgvector:pg17
+docker run -d --name nd-s3 -p 8333:8333 chrislusf/seaweedfs:3.71 server -s3 -dir=/data -ip.bind=0.0.0.0
+AUTH_DEV_USER=dev@example.com DATABASE_URL=postgres://notebook:notebook@127.0.0.1:5432/notebook \
+  S3_ENDPOINT=http://127.0.0.1:8333 S3_BUCKET=notebook-duplex S3_ACCESS_KEY=any S3_SECRET_KEY=any npm run server
 npm run dev                                # Vite on http://127.0.0.1:5173, proxies /api and /mcp
 ```
 
-Without a key, the server prints a generated one at startup. For a production-like run, `npm run build` then open the server URL directly. The container image (`Dockerfile`) is built on the lab's self-hosted runners and pushed to the internal Nexus registry (`192.168.0.140:5555/notebook-duplex`) by the `Container image` workflow on every push to `main`.
+`AUTH_DEV_USER` makes every request act as that user and the UI skip sign-in (the server refuses to start with it under `NODE_ENV=production`). Without it, set `OIDC_ISSUER`, `OIDC_JWKS_URL` and `OIDC_CLIENT_ID`. For a production-like run, `npm run build` then open the server URL directly. The container image (`Dockerfile`) is built on the lab's self-hosted runners and pushed to the internal Nexus registry (`192.168.0.140:5555/notebook-duplex`) by the `Container image` workflow on every push to `main`.
 
-Environment: `NOTEBOOK_API_KEY`, `PORT` (8787), `HOST` (127.0.0.1), `DATA_DIR` (`.runtime`), `PUBLIC_URL` (used for the MCP URL shown in the UI), `SESSION_GRACE_MS` (how long a session survives without its SSE stream, 20000).
+Environment: `DATABASE_URL` (required), `S3_ENDPOINT` (required), `S3_BUCKET` (`notebook-duplex`), `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` (`us-east-1`), `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_CLIENT_ID`, `OIDC_AUTHORITY_PUBLIC` (what the browser uses; defaults to the issuer), `AUTH_DEV_USER` (dev only), `PORT` (8787), `HOST` (127.0.0.1), `DATA_DIR` (`.runtime`; a legacy single-document `state.json` found there is imported on first boot and renamed `state.imported.json`), `PUBLIC_URL` (used for the MCP URL shown in the UI), `SESSION_GRACE_MS` (how long a session survives without its SSE stream, 20000).
 
-Read-aloud (the browser cannot reach the lab LAN, so the server proxies both under the notebook key): `KOKORO_URL` (`http://kokoro-tts.kokoro-tts.svc.cluster.local:8000`, OpenAI-style `POST /v1/audio/speech` returning WAV), `KOKORO_FALLBACK_URL` (`http://192.168.69.28:30882`, the GPU instance on the Spark, tried when the first is unreachable; set empty to disable), `KOKORO_VOICE` (`af_heart`), `DESCRIBE_LLM_URL` (`http://192.168.69.28:11434`, OpenAI-compatible `/v1/chat/completions`, reasoning off), `DESCRIBE_LLM_MODEL` (`gemma4:26b`), `DESCRIBE_LLM_TIMEOUT_MS` (20000). Descriptions are cached in memory by content hash; if the model is unreachable the server falls back to a deterministic description ("a flowchart with 4 nodes: A, B, C, D"). Endpoints: `POST /api/tts {text, speed}` → `audio/wav`, `POST /api/describe {kind, source, language}` → `{text}`.
+Read-aloud (the browser cannot reach the lab LAN, so the server proxies both behind sign-in): `KOKORO_URL` (`http://kokoro-tts.kokoro-tts.svc.cluster.local:8000`, OpenAI-style `POST /v1/audio/speech` returning WAV), `KOKORO_FALLBACK_URL` (`http://192.168.69.28:30882`, the GPU instance on the Spark, tried when the first is unreachable; set empty to disable), `KOKORO_VOICE` (`af_heart`), `DESCRIBE_LLM_URL` (`http://192.168.69.28:11434`, OpenAI-compatible `/v1/chat/completions`, reasoning off), `DESCRIBE_LLM_MODEL` (`gemma4:26b`), `DESCRIBE_LLM_TIMEOUT_MS` (20000). Descriptions are cached in memory by content hash; if the model is unreachable the server falls back to a deterministic description ("a flowchart with 4 nodes: A, B, C, D"). Endpoints: `POST /api/tts {text, speed}` → `audio/wav`, `POST /api/describe {kind, source, language}` → `{text}`.
 
 ## Verification
 
 ```sh
-npm test          # store, diff, narration, read-aloud proxy and server tests, including a real MCP client over Streamable HTTP
+npm test          # store, diff, narration, read-aloud proxy, library and server tests against real Postgres and SeaweedFS (Docker), including a real MCP client over Streamable HTTP
 npm run build     # type-check and web build
 npm run test:e2e  # Playwright: browser + MCP agent end to end (needs: npx playwright install chromium)
 ```
 
-The end-to-end tests cover the key gate, inline replace and insert proposals, editing before accept, stale detection, a remote MCP session receiving channel notifications, margin status rendering, reconsider round-trips, keyboard accept, undo, slash menu, Reading mode, and read-aloud (with `/api/tts` and `/api/describe` intercepted in the browser): highlight order across sentences, tables, images and diagrams, pause and resume, Read from here, held asks, the Claude-active lock, and edits emptying the recording.
+`npm test` starts `pgvector/pgvector:pg17` and `chrislusf/seaweedfs` on random ports and removes them at the end; set `TEST_DATABASE_URL` and `TEST_S3_ENDPOINT` (plus `TEST_S3_ACCESS_KEY`/`TEST_S3_SECRET_KEY`) to use existing services instead. Each server under test gets its own database and bucket. The end-to-end tests cover the sign-in gate, inline replace and insert proposals, editing before accept, stale detection, a remote MCP session receiving channel notifications, margin status rendering, reconsider round-trips, keyboard accept, undo, slash menu, Reading mode, and read-aloud (with `/api/tts` and `/api/describe` intercepted in the browser): highlight order across sentences, tables, images and diagrams, pause and resume, Read from here, held asks, the Claude-active lock, and edits emptying the recording.
 
 ## Limits
 
-- One notebook per deployment, single writer. No CRDT or simultaneous editing.
+- One shared library per deployment; a document has a single writer at a time. No CRDT or simultaneous editing. Jobs on documents that are not loaded in memory are only reclaimed once someone opens the document (or the agent passes `documentId` to `claim_job`).
 - Replace proposals cover paragraphs, headings and tables. Code blocks and diagrams can be inserted but not rewritten in place yet.
 - Tool permission and trust prompts stay in Claude's terminal. Channels are a Claude Code research preview and need the development-channel flag; organisation policy can disable them.
 - Cancelling a job invalidates late results but does not interrupt Claude's loop. The blocks you point at are the agent's focus, not a boundary: for commands it may change other blocks when the request needs it (moving content into a table, renaming a term everywhere). Automatic proofreading stays inside its scope. After a server restart, a reconnecting session with the same name inherits the previous session's open jobs.
 - Markdown import may normalise source. Obsidian syntax, frontmatter and raw HTML are not certified to round-trip.
-- Anyone with the notebook key can read and write the notebook and connect an agent to it. Rotate it from the lab vault if it leaks.
+- Anyone who can sign in to the Keycloak realm can read and edit every document and mint agent tokens. Tokens are revocable per user; there is no per-document access control yet (the schema carries `owner` for later).
