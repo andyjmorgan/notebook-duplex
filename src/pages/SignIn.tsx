@@ -1,6 +1,6 @@
 import { auth } from '../auth'
 import { ThemeToggle } from '../components/AppBar'
-import { AppleIcon, GitHubIcon, GoogleIcon, MicrosoftIcon } from '../components/Brand'
+import { AppleIcon, GitHubIcon, GoogleIcon, Logo, MicrosoftIcon } from '../components/Brand'
 
 const providers = [
   { id: 'google', name: 'Google', Icon: GoogleIcon },
@@ -15,7 +15,7 @@ export function SignIn({ status, error }: { status: 'loading' | 'signed-out' | '
     <div className="gate">
       <div className="gate-corner"><ThemeToggle /></div>
       <main className="gate-main">
-        <img src="/donkeywork.png" alt="DonkeyWork" className="gate-logo" width={96} height={96} />
+        <Logo size={96} className="gate-logo" />
         <h1>Welcome back</h1>
         <p className="gate-sub">Sign in to open your notebooks</p>
         {status === 'loading' ? <p className="caption" role="status">Checking your session…</p> : (

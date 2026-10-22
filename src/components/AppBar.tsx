@@ -14,11 +14,11 @@ export function ThemeToggle() {
   return <button className="icon-button" type="button" onClick={toggle} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label="Toggle theme">{theme === 'dark' ? <Sun size={18} aria-hidden /> : <Moon size={18} aria-hidden />}</button>
 }
 
-/** The top bar every page shares, laid out like the other DonkeyWork apps: brand, page middle, then GitHub, theme, account. */
+/** The top bar every page shares, brand, page middle, then GitHub, theme, account. */
 export function AppBar({ user, middle, actions }: { user: AuthUser | undefined; middle?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="appbar">
-      <Link className="brand" to="/" aria-label="DonkeyWork Notebook home"><Brand /></Link>
+      <Link className="brand" to="/" aria-label="andrewmorgan.ai Notebook home"><Brand /></Link>
       {middle ?? <span />}
       <div className="header-actions">
         {actions}
