@@ -24,8 +24,7 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
   const recent = [...jobs].filter(j => !active(j)).reverse().slice(0, 6)
   const pending = proposals.filter(p => p.status === 'pending')
   const acceptable = pending.filter(p => !p.stale && p.type !== 'comment')
-  const origin = mcpUrl.replace(/\/mcp$/, '')
-  const command = `claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${origin} --token <your access token>`
+  const command = `claude mcp add --transport http --scope user notebook-duplex ${mcpUrl} --header "Authorization: Bearer <your access token>"`
   const copy = async (text: string, label: string) => { try { await navigator.clipboard.writeText(text); onNotify(label) } catch { onNotify('Copy failed. Select the text instead.') } }
   return (
     <aside className="rail" aria-label="Collaboration">
@@ -97,11 +96,11 @@ export function Rail({ sessions, sessionId, onSession, jobs, activity, proposals
 
       <details className="setup">
         <summary>Connect a Claude session</summary>
-        <p>Claude Code channels run as a local stdio process. Create a personal access token, clone the repo once, register its <code>agent/channel.mjs</code> shim (it proxies to this server), then launch with the channel enabled:</p>
+        <p>Create a personal access token, register this server with Claude Code, then launch with the channel enabled:</p>
         <pre><code>{command}{'\n'}claude --dangerously-load-development-channels server:notebook-duplex</code></pre>
         <div className="setup-actions">
           <Link className="primary small" to="/settings/tokens"><KeyRound size={13} aria-hidden /> Agent access tokens</Link>
-          <button className="quiet small" onClick={() => copy(command + '\nclaude --dangerously-load-development-channels server:notebook-duplex', 'Commands copied. Paste your token and replace <checkout> with your clone path.')}>Copy commands</button>
+          <button className="quiet small" onClick={() => copy(command + '\nclaude --dangerously-load-development-channels server:notebook-duplex', 'Commands copied. Paste your token.')}>Copy commands</button>
         </div>
         <p>Claude proposes; only you accept. Tool permissions stay in Claude's terminal.</p>
       </details>

@@ -4,7 +4,7 @@ import { Check, Copy, KeyRound, Trash2 } from 'lucide-react'
 import { api, apiDelete } from '../api'
 import type { AccessToken } from '../types'
 
-export const mcpAddCommand = (token: string, origin = location.origin) => `claude mcp add --transport stdio --scope user notebook-duplex -- node <checkout>/agent/channel.mjs --url ${origin} --token ${token}`
+export const mcpAddCommand = (token: string, origin = location.origin) => `claude mcp add --transport http --scope user notebook-duplex ${origin}/mcp --header "Authorization: Bearer ${token}"`
 
 async function copyText(text: string, label: string) {
   try { await navigator.clipboard.writeText(text); toast.success(label) } catch { toast.error('Copy failed. Select the text instead.') }
@@ -30,7 +30,7 @@ export default function TokensPage() {
     if (!confirm(`Revoke “${t.name}”? Claude sessions using it stop working immediately.`)) return
     try { await apiDelete(`/api/tokens/${encodeURIComponent(t.id)}`); if (fresh?.id === t.id) setFresh(undefined); toast(`Revoked ${t.name}.`); void load() } catch (e) { toast.error((e as Error).message) }
   }
-  const copy = async (what: 'token' | 'command') => { if (!fresh) return; await copyText(what === 'token' ? fresh.token : mcpAddCommand(fresh.token), what === 'token' ? 'Token copied.' : 'Command copied. Replace <checkout> with your clone path.'); setCopied(what) }
+  const copy = async (what: 'token' | 'command') => { if (!fresh) return; await copyText(what === 'token' ? fresh.token : mcpAddCommand(fresh.token), what === 'token' ? 'Token copied.' : 'Command copied.'); setCopied(what) }
   return (
     <main className="settings">
       <h1 className="page-title"><KeyRound size={20} aria-hidden /> Agent access tokens</h1>
@@ -47,7 +47,7 @@ export default function TokensPage() {
           <div className="fresh-token" role="status">
             <p><strong>{fresh.name}</strong> is ready. Copy it now; it will not be shown again.</p>
             <div className="token-row"><code className="token-value" data-testid="fresh-token">{fresh.token}</code><button className="quiet small" onClick={() => void copy('token')}>{copied === 'token' ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} Copy token</button></div>
-            <p className="caption">Register the shim once, then launch Claude with the channel enabled:</p>
+            <p className="caption">Register the server once, then launch Claude with the channel enabled:</p>
             <pre className="command"><code>{mcpAddCommand(fresh.token)}{'\n'}claude --dangerously-load-development-channels server:notebook-duplex</code></pre>
             <div className="setup-actions"><button className="quiet small" onClick={() => void copy('command')}>{copied === 'command' ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} Copy command</button></div>
           </div>
