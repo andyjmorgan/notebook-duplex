@@ -70,19 +70,19 @@ One shared library per deployment: every signed-in user sees and edits every doc
 
 ## Connect a Claude session
 
-Open the user menu → **Agent access tokens** and create one. Tokens look like `ndp_…`, are shown once and stored hashed; revoke them from the same page. Claude Code channels only run as a local stdio process that Claude spawns, so the connection goes through a small shim, `agent/channel.mjs`, which proxies tools to the hosted server over MCP Streamable HTTP and forwards channel notifications back. Clone this repo once and `npm ci`, then register the shim (user scope makes it available from every repository):
-
-Claude Code channels only run as a local stdio process that Claude spawns, so the connection goes through a small shim, `agent/channel.mjs`, which proxies tools to the hosted server over MCP Streamable HTTP and forwards channel notifications back. Create a personal access token under **Agent access tokens** in the user menu (`/settings/tokens`): it is shown once, stored hashed, and every job records which account asked. Clone this repo once and `npm ci`, then register the shim (user scope makes it available from every repository):
+Open the user menu → **Agent access tokens** (`/settings/tokens`) and create one. Tokens look like `ndp_…`, are shown once and stored hashed; revoke them from the same page. Every job records which account asked. Register the hosted server over MCP Streamable HTTP (user scope makes it available from every repository), then launch Claude with the channel enabled:
 
 ```sh
-claude mcp add --transport stdio --scope user notebook-duplex -- \
-  node /path/to/notebook-duplex/agent/channel.mjs --url https://notebook.donkeywork.dev --token ndp_…
+claude mcp add --transport http --scope user notebook-duplex https://notebook.donkeywork.dev/mcp \
+  --header "Authorization: Bearer ndp_…"
 claude --dangerously-load-development-channels server:notebook-duplex
 ```
 
-The tokens page shows this command ready to paste with your new token; the rail's **Connect a Claude session** panel links there. Revoking a token disconnects anything using it. Accept the development-channel warning and the usual trust prompts in Claude's terminal. The shim names the session after the directory Claude runs in and reports that path, so you can tell sessions apart in the editor. `--name` overrides it; `NOTEBOOK_DUPLEX_URL`, `NOTEBOOK_DUPLEX_KEY` and `NOTEBOOK_DUPLEX_NAME` work as environment variables too.
+The tokens page shows this command ready to paste with your new token; the rail's **Connect a Claude session** panel links there. Revoking a token disconnects anything using it. Accept the development-channel warning and the usual trust prompts in Claude's terminal. The session names itself with `identify_session`, so you can tell sessions apart in the editor.
 
-Multiple sessions can connect at once. Each job is addressed to one session. Restarting Claude creates a new session; cancel and resubmit anything it was holding. If you are on the lab LAN, the hostname must resolve to office1 rather than the public IP (the EdgeRouter has a static host mapping for this), or TLS will present the router's certificate.
+`agent/channel.mjs` is an optional stdio shim for clients that cannot speak Streamable HTTP. It proxies tools to the hosted server and forwards channel notifications back: `claude mcp add --transport stdio notebook-duplex -- node /path/to/agent/channel.mjs --url https://notebook.donkeywork.dev --token ndp_…`. It names the session after the directory Claude runs in; `--name` overrides it, and `NOTEBOOK_DUPLEX_URL`, `NOTEBOOK_DUPLEX_KEY` and `NOTEBOOK_DUPLEX_NAME` work as environment variables too.
+
+Multiple sessions can connect at once. Each job is addressed to one session. Restarting Claude creates a new session; cancel and resubmit anything it was holding. If you are on the lab LAN, the hostname must resolve to office1 rather than the public IP (the EdgeRouter hairpins `89.101.223.115:443` to office1 for LAN clients; see `edgerouter-https-hairpin.cli` in the k3s repo), or TLS will present the router's certificate.
 
 ## Agent tools
 
@@ -123,7 +123,7 @@ flowchart LR
 
 ## Theming
 
-The app uses the DonkeyWork design tokens as CSS custom properties in `src/style.css`: a light set on `:root` and a dark set under `.dark` on `<html>` (backgrounds, borders, text, cyan accent, success/warning/error, a cyan→blue gradient for primary buttons). The legacy `--ui-*` names map onto them; purple (`--ui-brand`) is kept for agent suggestions and indigo (`--ui-ai`) for agent activity, because those identify Claude, and amber stays for read-aloud. Fonts are Inter and JetBrains Mono (`@fontsource`), icons come from `lucide-react`, toasts from `sonner`. The theme choice (system, light, dark) is in the user menu and persisted in `localStorage`; Mermaid diagrams without an explicit theme follow it.
+The app uses the andrewmorgan.ai design tokens as CSS custom properties in `src/style.css`: a warm light set on `:root` and a graphite dark set under `.dark` on `<html>` (backgrounds, borders, text, Sage accent, desaturated success/warning/error). Primary buttons are solid Sage; the Sage gradient belongs to the am.ai mark (`public/am-ai-sage-*.svg`) only. The legacy `--ui-*` names map onto them; purple (`--ui-brand`) is kept for agent suggestions and indigo (`--ui-ai`) for agent activity, because those identify Claude, and amber stays for read-aloud. Fonts are IBM Plex Sans and IBM Plex Mono (`@fontsource`), icons come from `lucide-react`, toasts from `sonner`. The theme choice (system, light, dark) is in the user menu and persisted in `localStorage`; Mermaid diagrams without an explicit theme follow it.
 
 ## Run locally
 

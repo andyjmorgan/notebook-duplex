@@ -1,9 +1,9 @@
-// Theme: light or dark, dark by default like the other DonkeyWork apps. Persisted as `donkeywork-theme`
+// Theme: light or dark, dark by default. Persisted as `notebook-theme`
 // and applied as the `.dark` class on <html> (the token convention), with `color-scheme` kept in step.
 import { useEffect, useState } from 'react'
 
 export type Theme = 'light' | 'dark'
-const KEY = 'donkeywork-theme'
+const KEY = 'notebook-theme'
 const listeners = new Set<() => void>()
 
 export function getTheme(): Theme {
