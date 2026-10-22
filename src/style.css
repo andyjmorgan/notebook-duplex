@@ -375,7 +375,7 @@ select { width: 100%; padding: 7px 9px; border: 1px solid var(--border-default);
 .menu-item .menu-icon.reading { color: var(--ui-reading) }
 
 /* Brand lockup, top bar icons */
-.brand-lockup { display: inline-flex; align-items: center; gap: 10px } .brand-image { height: auto; flex-shrink: 0 } .brand-image.on-dark, .dark .brand-image.on-light { display: none } .dark .brand-image.on-dark { display: block } .brand-text { display: flex; flex-direction: column; line-height: 1 } .brand-name { font-size: 14px; font-weight: 600; letter-spacing: -.2px } .brand-product { margin-top: 4px; font-size: 10px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; color: var(--accent) }
+.brand-lockup { display: inline-flex; align-items: center; gap: 10px } .brand-image { height: auto; flex-shrink: 0 } .brand-image.on-dark, .dark .brand-image.on-light { display: none } .dark .brand-image.on-dark { display: block } .brand-text { display: flex; flex-direction: column; line-height: 1 } .brand-name { font-size: 14px; font-weight: 600; letter-spacing: -.2px }
 .icon-button { display: inline-grid; place-items: center; width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: var(--radius); color: var(--text-secondary) } .icon-button:hover { background: var(--bg-tertiary); color: var(--text-primary) }
 
 /* Sign-in */

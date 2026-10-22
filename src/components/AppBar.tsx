@@ -18,7 +18,7 @@ export function ThemeToggle() {
 export function AppBar({ user, middle, actions }: { user: AuthUser | undefined; middle?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="appbar">
-      <Link className="brand" to="/" aria-label="andrewmorgan.ai Notebook home"><Brand /></Link>
+      <Link className="brand" to="/" aria-label="Notebook home"><Brand /></Link>
       {middle ?? <span />}
       <div className="header-actions">
         {actions}
