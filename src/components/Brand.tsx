@@ -20,12 +20,12 @@ export function Logo({ size = 32, className = '' }: { size?: number; className?:
   )
 }
 
-/** andrewmorgan.ai wordmark: the am.ai mark, then the name over a small Sage product label. */
+/** Wordmark: the am.ai mark, then the product name. */
 export function Brand({ compact = false, size = 32 }: { compact?: boolean; size?: number }) {
   return (
     <span className="brand-lockup">
       <Logo size={size} />
-      {!compact && <span className="brand-text"><span className="brand-name">andrewmorgan.ai</span><span className="brand-product">Notebook</span></span>}
+      {!compact && <span className="brand-text"><span className="brand-name">Notebook</span></span>}
     </span>
   )
 }
